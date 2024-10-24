@@ -62,6 +62,8 @@ if __name__ == '__main__':
                         help='The type of spectra: can be "blackbody", "phoenix", "flat", "emission", '
                              '"sky_emission", or "from_file".')
     parser.add_argument('--outdir', default='outdir', type=str, help='Directory for output files.')
+    parser.add_argument('-rs', '--random_seed', default=10, type=int,
+                        help='Random seed for reproducibility.')
     parser.add_argument('--R0s_file', default='R0s.csv', type=str,
                         help="Filename of the R0s file, will be created if it doesn't exist.")
     parser.add_argument('--phaseoffset_file', default='phase_offsets.csv', type=str,
@@ -185,13 +187,16 @@ if __name__ == '__main__':
     # ==================================================================================================================
     # INSTANTIATE SPECTROGRAPH & DETECTOR
     # ==================================================================================================================
+    np.random.seed(args.random_seed)
+    logger.info(f'The random seed has been set to {args.random_seed}.')
+    
     try:  # check for the spectral resolution file, create if not exist
         R0s = np.loadtxt(fname=sim.R0s_file, delimiter=',')
         logger.info(f'The pixel Rs @ {sim.l0} nm were imported from {sim.R0s_file}.')
     except IOError:
         R0s = np.random.uniform(low=.85, high=1.15, size=sim.npix) * sim.designR0
         np.savetxt(fname=sim.R0s_file, X=R0s, delimiter=',')
-        logger.info(msg=f'The pixel Rs @ {sim.l0} nm were randomly generated from R0 and saved to {sim.R0s_file}.')
+        logger.info(msg=f'The pixel Rs @ {sim.l0} were randomly generated from R0 and saved to {sim.R0s_file}.')
 
     try:  # check for the phase offset file, create if not exist
         phase_offsets = np.loadtxt(fname=sim.phaseoffset_file, delimiter=',')
@@ -251,7 +256,7 @@ if __name__ == '__main__':
     clipped_spectrum = clip_spectrum(x=bandpass_spectrum, clip_range=(sim.minwave, sim.maxwave))
 
     # blaze spectrum and directly integrate into pixel space to verify:
-    blazed_spectrum, masked_waves, masked_blaze = eng.blaze(wave=clipped_spectrum.waveset, spectra=clipped_spectrum)
+    blazed_spectrum, masked_waves, masked_blaze = eng.blaze(wave=clipped_spectrum.waveset, spectra=clipped_spectrum(clipped_spectrum.waveset))
     blazed_int_spec = np.array([
         eng.lambda_to_pixel_space(
             array_wave=clipped_spectrum.waveset,
@@ -374,5 +379,4 @@ if __name__ == '__main__':
                                                    r"Post-Convolution (integrated), and Observed Photon Count (FSR-binned)")
         fig.tight_layout()
         plt.show()
-
     pass
