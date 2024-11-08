@@ -19,7 +19,7 @@ from lmfit import Parameters, minimize
 from mkidpipeline.photontable import Photontable
 import ucsbsim.mkidspec.engine as engine
 from ucsbsim.mkidspec.msf import MKIDSpreadFunction
-from ucsbsim.mkidspec.detector import wave_to_phase, phase_to_wave, lasercal, sorted_table
+from ucsbsim.mkidspec.detector import wave_to_phase, phase_to_wave, sorted_table
 from ucsbsim.mkidspec.plotting import quick_plot
 import ucsbsim.mkidspec.utils.general as gen
 
