@@ -102,7 +102,7 @@ if __name__ == '__main__':
     parser.add_argument('--pixsize', default=20, type=float,
                         help='The width of the MKID pixel in the dispersion direction [um].')
     parser.add_argument('-R0', default=15, type=float, help='The R at the defined wavelength l0.')
-    parser.add_argument('-l0', default='same',
+    parser.add_argument('-l0', default=800,
                         help="The wavelength for which R0 is defined [nm]. Can be 'same' to be equal to 'maxw' arg.")
     parser.add_argument('--osamp', default=10, type=int,
                         help='# of samples to use for the smallest dlambda during convolution.')
@@ -196,7 +196,7 @@ if __name__ == '__main__':
     
     try:  # check for the spectral resolution file, create if not exist
         R0s = np.loadtxt(fname=sim.R0s_file, delimiter=',')
-        logger.info(f'The pixel Rs @ {sim.l0} nm were imported from {sim.R0s_file}.')
+        logger.info(f'The pixel Rs @ {sim.l0} were imported from {sim.R0s_file}.')
     except IOError:
         R0s = np.random.uniform(low=.85, high=1.15, size=sim.npix) * sim.designR0
         np.savetxt(fname=sim.R0s_file, X=R0s, delimiter=',')
