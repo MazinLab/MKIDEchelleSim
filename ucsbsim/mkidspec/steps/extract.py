@@ -31,8 +31,8 @@ def extract(
 
     spectrum = fits.open(f'{obs_fits}', mode='update')
     obs_flux_corr = np.array([np.array(spectrum[1].data[n]) for n, i in enumerate(orders)])
-    err_p = np.array([np.array(spectrum[2].data[n]) for n, i in enumerate(orders)])
-    err_n = np.array([np.array(spectrum[3].data[n]) for n, i in enumerate(orders)])
+    bleed_p = np.array([np.array(spectrum[2].data[n]) for n, i in enumerate(orders)])
+    bleed_n = np.array([np.array(spectrum[3].data[n]) for n, i in enumerate(orders)])
     guess_wave = np.array([np.array(spectrum[4].data[n]) for n, i in enumerate(orders)])
     obs_flux = np.array([np.array(spectrum[5].data[n]) for n, i in enumerate(orders)])
     hdu_list = fits.HDUList([spectrum[0],
@@ -43,6 +43,12 @@ def extract(
                              fits.BinTableHDU(Table(wavecal), name='Wavecal')])
     hdu_list.writeto(obs_fits, output_verify='ignore', overwrite=True)
     logger.info(f'The FITS file has been updated with the wavecal: {obs_fits}.')
+
+    err_p_corr = np.around(np.sqrt(np.array(bleed_p) + obs_flux_corr))
+    err_n_corr = np.around(np.sqrt(np.array(bleed_n) + obs_flux_corr))
+
+    err_p = np.around(np.sqrt(np.array(bleed_p) + obs_flux))
+    err_n = np.around(np.sqrt(np.array(bleed_n) + obs_flux))
 
     if plot:
         # comparing the wavecal solution to the simulation wavelengths
@@ -72,16 +78,15 @@ def extract(
 
         axes[1].grid()
         for n, i in enumerate(orders):
-            specerr_pcorr = obs_flux_corr[n] + err_p[n]
+            specerr_pcorr = obs_flux_corr[n] + err_p_corr[n]
             specerr_pcorr[specerr_pcorr < 0] = 0
-            specerr_ncorr = obs_flux_corr[n] - err_n[n]
+            specerr_ncorr = obs_flux_corr[n] - err_n_corr[n]
             specerr_ncorr[specerr_ncorr < 0] = 0
             axes[1].fill_between(wavecal[n] / 10, specerr_ncorr, specerr_pcorr, edgecolor='r',
                                  facecolor='r', linewidth=0.5)
             axes[1].plot(wavecal[n] / 10, obs_flux_corr[n], 'k', linewidth=0.5)
         axes[1].set_title('Order-Bleed Subtraction-Corrected (Error in Red)')
         axes[1].set_xlabel('Wavelength (nm)')
-        plt.legend()
         plt.tight_layout()
         plt.show()
         pass
