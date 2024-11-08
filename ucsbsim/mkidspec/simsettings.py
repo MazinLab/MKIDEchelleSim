@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import astropy.units as u
 from astropy.constants import R_sun
 
-from engine import Engine
 from ucsbsim.mkidspec.spectrograph import GratingSetup, SpectrographSetup
 from ucsbsim.mkidspec.detector import MKIDDetector
 import ucsbsim.mkidspec.engine as engine
@@ -126,4 +125,4 @@ class SpecSimSettings:
     
     @property
     def engine(self):
-        return Engine(spectrograph=self.spectrograph)
+        return engine.Engine(spectrograph=self.spectrograph)
