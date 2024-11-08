@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 from copy import deepcopy
 import matplotlib.pyplot as plt
 import time
@@ -18,6 +19,7 @@ from synphot.models import BlackBodyNorm1D, ConstFlux1D
 from synphot import SourceSpectrum
 from ucsbsim.mkidspec.msf import MKIDSpreadFunction
 from mkidpipeline.photontable import Photontable
+import ucsbsim.mkidspec.utils.general as gen
 
 """
 Application of the virtual pixel boundaries and errors on an spectrum using the MSF products. The steps are:
@@ -27,6 +29,9 @@ Application of the virtual pixel boundaries and errors on an spectrum using the 
 -Save counts, errors, and estimate of wave range to FITS.
 -Show final spectrum as plot.
 """
+
+logger = logging.getLogger('ordersort')
+
 
 def ordersort(
         table: Photontable,
@@ -42,46 +47,47 @@ def ordersort(
 
     if isinstance(msf, str):
         msf = MKIDSpreadFunction(filename=msf)
-    sim = msf.sim_settings.item()
-    logger.info(f'Obtained MKID Spread Function from {msf_file}.')
+    sim = msf.sim_settings
+    phis = msf.waves
+    sigs = msf.sigmas
+    logger.info(f'Obtained MKID Spread Function from {msf}.')
 
     # INSTANTIATE SPECTROGRAPH & DETECTOR:
-    detector = sim.detector
-    pixels = detector.pixel_indices
     spectro = sim.spectrograph
+    detector = spectro.detector
+    pixels = detector.pixel_indices
 
     # shorten some variables
     nord = spectro.nord
     lambda_pixel = spectro.pixel_wavelengths().to(u.nm)[::-1]
 
     spec = np.zeros([nord, sim.npix])
-    for j in pixels:  # binning photons by MSF bins edges
-        spec[:, j], _ = np.histogram(photons_pixel[j], bins=msf.bin_edges[:, j])
+    for p in pixels:  # binning photons by MSF bins edges
+        spec[:, p], _ = np.histogram(photons_pixel[p], bins=msf.order_edges[:, p])
 
     spec_unfixed = deepcopy(spec)
+    
+    #pixels = [1433]
+    
+    bleed_p = np.zeros([nord, sim.npix])
+    bleed_n = np.zeros([nord, sim.npix])
+    
+    logger.info('Order sorting...')
+    for p in pixels:
+        spec[:, p] = np.dot(spec[:, p], np.linalg.inv(msf.cov_matrix[:, :, p]))
+        spec[:, p] = np.around(spec[:, p])
+        spec[spec < 0] = 0
+        bleed_p[:, p] = [np.sum(spec[:, p] * msf.cov_matrix[:, o, p]) - spec[o, p] * msf.cov_matrix[o, o, p] for o in range(nord)]
+        bleed_n[:, p] = [np.sum(spec[o, p] * msf.cov_matrix[o, :, p]) - spec[o, p] * msf.cov_matrix[o, o, p] for o in range(nord)]
 
-    err_p = np.zeros([nord, sim.npix])
-    err_n = np.zeros([nord, sim.npix])
-    count_order = np.argsort(spec, axis=0)
-    for i in count_order[::-1]:
-        err_indiv = msf.cov_matrix[i, :, pixels] * spec[i, pixels][:, None]  # getting counts that should be contained in the ith order
-        err_indiv[pixels, i] = 0  # setting the ith order error to 0 since these will be added to the ith counts
-        err_p += err_indiv.T  # removed counts propagated through as the positive (upper limit) error for other orders
-        err_n[i, pixels] = np.sum(err_indiv, axis=1)  # all errors added up and made into the negative ith error
-        spec -= err_indiv.T  # removing the counts from the other orders
-        spec[i, pixels] += err_n[i, pixels]  # adding the counts to the ith order
-    spec[spec < 0] = 0
-    spec = np.around(spec)
-    err_p = np.around(err_p)
-    err_n = np.around(err_n)
-
+    warnings.filterwarnings(action="ignore")  # ignore FITS warnings
     # saving extracted and unblazed spectrum to file
     fits_file = f'{outdir}/{filename}.fits'
     hdu_list = fits.HDUList([fits.PrimaryHDU(),
                              fits.BinTableHDU(Table(spec), name='Corrected Spectrum'),
-                             fits.BinTableHDU(Table(err_p), name='- Errors'),
-                             fits.BinTableHDU(Table(err_n), name='+ Errors'),
-                             fits.BinTableHDU(Table(lambda_pixel.to(u.Angstrom)), name='Wave Range'),
+                             fits.BinTableHDU(Table(bleed_p), name='+ Bleed Errors'),
+                             fits.BinTableHDU(Table(bleed_n), name='- Bleed Errors'),
+                             fits.BinTableHDU(Table(lambda_pixel.to(u.Angstrom)), name='Guess Wave'),
                              fits.BinTableHDU(Table(spec_unfixed), name='Uncorrected Spectrum')])
 
     hdu_list.writeto(fits_file, output_verify='ignore', overwrite=True)
@@ -101,7 +107,7 @@ def ordersort(
         axes[-2].set_xlabel("Pixel Index")
         axes[0].set_ylabel('Photon Count')
         axes[2].set_ylabel('Photon Count')
-        plt.suptitle(f'Sorted spectrum with error band')
+        plt.suptitle(f'Sorted spectrum')
         plt.tight_layout()
         plt.show()
     return fits_file
