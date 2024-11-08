@@ -11,6 +11,7 @@ from ucsbsim.mkidspec.steps.ordersort import ordersort
 from ucsbsim.mkidspec.steps.wavecal import wavecal
 from ucsbsim.mkidspec.steps.extract import extract
 from ucsbsim.mkidspec.simsettings import SpecSimSettings
+from ucsbsim.mkidspec.msf import MKIDSpreadFunction
 
 
 def parse():
@@ -27,12 +28,10 @@ def parse():
                              'Directory/name of the complete MKID Spread Function .npz file.'
                              'Pass "False" to disable this step.')
     parser.add_argument('--bin_range', default=(-1.5, 0), type=tuple, help='Start and stop of range for phase histogram.')
-    parser.add_argument('--bins', default=75, type=int, help='Number of bins for phase histogram.')
     parser.add_argument('--missing_order_pix', nargs='*',
-                        default=[0, 350, 3, 350, 1300, 1, 0, 1300, 13, 1300, 2047, 2, 1300, 2047, 24],
+                        default=[0, 350, 3, 350, 1300, 1, 0, 1300, 13, 1300, 2048, 2, 1300, 2048, 24],
                         help='Array of [startpix, stoppix, missing orders as single digit indexed from 1, and so on],'
                              'e.g.: [0, 1000, 13, 1000, 2000, 25].' )
-    parser.add_argument('--snr', default=7, type=tuple, help='Minimum SNR for peak-finding.')
 
     # optional wavecal args:
     parser.add_argument('--wavecal', default='outdir/emission.h5',
@@ -81,9 +80,11 @@ if __name__ == "__main__":
         msf_table = Photontable(file_name=args.msf)
         steps.append('msf')
         sim = msf_table.query_header('sim_settings')
-    elif args.msf.lower().endswith('.npz'):  # the MSF file already exists
-        msf_obj = MKIDSpreadFunction(filename=msf_file)
-        sim = msf_obj.sim_settings.item()
+    elif args.msf.lower().endswith('.pkl'):  # the MSF file already exists
+        msf_obj = MKIDSpreadFunction(filename=args.msf)
+        sim = msf_obj.sim_settings
+    else:
+        raise ValueError('Unrecognized MSF file extension.')
 
     # wavecal
     if args.wavecal.lower().endswith('.h5'):  # the table is not order-sorted and wavecal has yet to be done
@@ -95,6 +96,8 @@ if __name__ == "__main__":
         steps.append('wavecal')
     elif args.wavecal.lower().endswith('.npz'):  # the wavecal file already exists
         wavecal_file = args.wavecal
+    else:
+        raise ValueError('Unrecognized wavecal file extension.')
 
     # extract
     if args.wavecal:
@@ -105,6 +108,8 @@ if __name__ == "__main__":
         elif args.extract.lower().endswith('.fits'):  # the observation is awaiting extraction
             obs_fits = args.extract
             steps.append('extract')
+        else:
+            raise ValueError('Unrecognized extraction file extension.')
 
     logger.info(f'The {steps} step(s) will be conducted.')
     # execute the steps:
@@ -118,9 +123,7 @@ if __name__ == "__main__":
             resid_map=sim.resid_file,
             outdir=args.outdir,
             bin_range=args.bin_range,
-            bins=args.bins,
             missing_order_pix=missing_order_pix,
-            snr=args.snr,
             plot=args.plot
         )
     if 'wt_sort' in steps:
@@ -137,8 +140,8 @@ if __name__ == "__main__":
             wavecal_fits=wavecal_fits,
             orders=args.orders,
             elem=args.elem,
-            minw=args.minw,
-            maxw=args.maxw,
+            minw=sim.minwave,
+            maxw=sim.maxwave,
             residual_max=args.residual_max,
             degree=args.degree,
             iters=args.iters,
