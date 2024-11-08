@@ -1,6 +1,6 @@
 import numpy as np
 import astropy.units as u
-from scipy.constants import h, c
+from astropy.constants import h, c
 
 
 def gauss(x, mu, sig, A):
@@ -22,8 +22,8 @@ def gauss_intersect(mu, sig, A):
     :return: analytic calculation of the intersection point between 2 1D Gaussian functions
     """
 
-    if sig.any() == 0 or A.any() == 0:
-        raise ValueError("The sigmas and amplitudes must all be non-zero to find the Gaussian intersection.")
+    if sig.any() <= 0 or A.any() <= 0:
+        raise ValueError("The sigmas and amplitudes must be positive to find the Gaussian intersection.")
 
     assert mu.size == sig.size and mu.size == A.size, "mu, sig, and A must all be the same size."
 
@@ -72,30 +72,18 @@ def sig_to_R(sig, lam):
     return np.abs(R)
 
 
-def wave_to_eV(wave):
+def wave_to_energy(wave):
     """
     :param wave: wavelength in astropy units
     :return: energy in eV
     """
-    return ((h*u.J*u.s) * (c * u.m / u.s) / wave).to(u.eV)
+    return (h*c / wave).to(u.eV)
 
 
-def energy_to_nm(eV):
+def energy_to_wave(energy):
     """
-    :param eV: energy in astropy units
+    :param energy: energy in astropy units
     :return: wavelength in nm
     """
-    return ((h*u.J*u.s) * (c * u.m / u.s) / eV).to(u.nm)
+    return (h * c / energy).to(u.nm)
 
-
-def n_bins(n_data: int, method: str = 'rice'):
-    # TODO include more algorithms based on number of data points
-    """
-    :param int n_data: number of data points
-    :param str method: # of bin method to use, only Rice available currently
-    :return: best number of bins based on various algorithms
-    """
-    if method == 'rice':
-        return int(4 * n_data ** (1 / 3))  # multiplied by 2 because sparsest pixel likely only has 2 gauss (need 4)
-    else:
-        raise ValueError(f'Method {method} not supported.')
