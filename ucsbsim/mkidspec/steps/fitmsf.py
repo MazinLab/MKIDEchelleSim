@@ -1,5 +1,4 @@
 from copy import deepcopy
-
 import numpy as np
 from numpy.polynomial.legendre import Legendre
 import scipy.interpolate as interp
@@ -7,7 +6,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from mpl_point_clicker import clicker
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import copy
 import tqdm
 from pandas.core.computation.expressions import where
 from sklearn.cluster import k_means
@@ -252,15 +250,14 @@ def phis_from_grating_eq(orders, phi_0: float, leg, coefs=None):
     return np.append(np.array(phis), phi_0)
 
 
-def cov_from_params(params, model, nord, order_edges, x_phases, **fit_kwargs):
+def cov_from_params(params, model, nord, order_edges, x_phases):
     """
     :param params: Parameter object
-    :param model: the model function
+    :param model: the model function split up into orders
     :param nord: the number of orders
     :param order_edges: the indices of the virtual pixel edges
     :param x_phases: phase grid to be used
-    :param fit_kwargs: kwargs to pass to fit_func
-    :return: the covariance between orders as nord x nord array, diagonal should be near 1
+    :return: the covariance between orders as nord x nord array
     """
 
     # v giving order, > receiving order [g_idx, r_idx, pixel]
@@ -272,17 +269,11 @@ def cov_from_params(params, model, nord, order_edges, x_phases, **fit_kwargs):
     # 5 [  #   #   #   #   1  ]
     #      ^ how much of other orders is in order 9, every column must be a fraction of every orders
     # TODO write comments
-    model = interp.InterpolatedUnivariateSpline(x=x_phases, y=model, k=1, ext=1)
-    model_sum = np.array([model.integral(order_edges[i], order_edges[i + 1]) for i in range(len(order_edges) - 1)])
+    model_int = [interp.InterpolatedUnivariateSpline(x=x_phases, y=model[:, m], k=1, ext='zeros') for m in range(nord)]
+    model_sum = np.array([m.integral(order_edges[0], order_edges[-1]) for m in model_int])
     cov = np.zeros([nord, nord])
-    for o in list(range(nord))[::-1]:
-        suppress_params = copy.deepcopy(params)
-        suppress_params.add(f'O{o}_amp', value=0)
-        suppress_model = fit_func(suppress_params, x_phases, **fit_kwargs)
-        suppress_model = interp.InterpolatedUnivariateSpline(x=x_phases, y=suppress_model, k=1, ext=1)
-        suppress_model_sum = np.array([
-            suppress_model.integral(order_edges[i], order_edges[i + 1]) for i in range(len(order_edges) - 1)])
-        cov[o, :] = np.nan_to_num(np.divide(model_sum - suppress_model_sum, model_sum[o]))
+    for o in range(nord):
+        cov[o, :] = np.array([np.nan_to_num(model_int[o].integral(order_edges[m], order_edges[m + 1]) / model_sum[o], posinf=0, neginf=0) for m in range(nord)])
         cov[o, model_sum == 0] = 0
         if np.array_equal(cov[o, :], np.zeros([nord])):
             cov[o, o] = 1
@@ -330,7 +321,7 @@ def fitmsf(
     nord = spectro.nord
     pixels = detector.pixel_indices
     pix_waves = spectro.pixel_wavelengths().to(u.nm)[::-1]  # flip order axis to be in ascending phase/lambda
-    energy = gen.wave_to_eV(pix_waves).value
+    energy = gen.wave_to_energy(pix_waves).value
 
     # pre-bin each pixel with the same bin edges and get centers for plotting:
     bin_width = bin_width_from_MKID_R(detector.design_R0)
@@ -495,9 +486,8 @@ def fitmsf(
             ord_counts[:, p], _ = np.histogram(photons_pixel[p], bins=order_edges[:, p])
             
             # find order-bleeding covar:
-            covariance[:, :, p] = cov_from_params(params=opt_params.params, model=gausses[:, p], nord=nord,
-                                                  order_edges=order_edges[:, p], x_phases=fine_phase_grid,
-                                                  orders=spectro.orders, legendre_e=leg_e, legendre_s=leg_s, to_sum=True)
+            covariance[:, :, p] = cov_from_params(params=opt_params.params, model=gausses_i[:, :, p], nord=nord,
+                                                  order_edges=order_edges[:, p], x_phases=fine_phase_grid)
             # to plot covariance as errors, must sum the counts "added" from other orders as well as "stolen" by other orders
             # v giving order, > receiving order [g_idx, r_idx, pixel]
             #      9   8   7   6   5
@@ -508,13 +498,14 @@ def fitmsf(
             # 5 [  #   #   #   #   1  ]
             #      ^ multiply counts*cov in other orders to add to Order 9
     
-            # apply the cov to data and extract errors:
-            cov_perr = np.array([int(np.sum(covariance[:, i, p] * ord_counts[:, p]) -
-                                        covariance[i, i, p] * ord_counts[i, p]) for i in range(nord)])
-            cov_merr = np.array([int(np.sum(covariance[i, :, p] * ord_counts[:, p]) -
-                                        covariance[i, i, p] * ord_counts[i, p]) for i in range(nord)])
-            p_err[:, p] = np.sqrt(cov_perr**2+ord_counts[:, p])
-            m_err[:, p] = np.sqrt(cov_merr**2+ord_counts[:, p])
+            # TODO the system of linear equations
+            cov_inv = np.linalg.inv(covariance[:, :, p])
+            true_count = np.dot(ord_counts[:, p], cov_inv)
+            p_err[:, p] = [np.sum(true_count * covariance[:, m, p]) - true_count[m] * covariance[m, m, p] for m in range(nord)]
+            m_err[:, p] = [np.sum(true_count * covariance[m, :, p]) - true_count[m] * covariance[m, m, p] for m in range(nord)]
+            if np.abs(np.sum(true_count) - np.sum(ord_counts[:, p])) > 1:
+               print(f'Pixel {p} true and bounded counts are more than 1 photon apart.')
+
         except ValueError:
             ord_counts[:, p] = np.nan
             covariance[:, :, p] = np.nan
@@ -603,12 +594,12 @@ def fitmsf(
                         fit_phis[-1] - fit_phis[0])
                 return (leg_e(fit_phis[-1]) - leg_e(fit_phis[0])) / (fit_phis[-1] - fit_phis[0]) * x + b
 
-            masked_reg = gen.energy_to_nm(leg_e(new_x) * energy[-1, p] * u.eV)
-            masked_lin = gen.energy_to_nm(e_poly_linear(new_x) * energy[-1, p] * u.eV)
+            masked_reg = gen.energy_to_wave(leg_e(new_x) * energy[-1, p] * u.eV)
+            masked_lin = gen.energy_to_wave(e_poly_linear(new_x) * energy[-1, p] * u.eV)
             deviation = masked_reg - masked_lin
             ax2.plot(new_x, deviation, color='k')
             for m, i in enumerate(fit_phis):
-                ax2.plot(i, gen.energy_to_nm(leg_e(i) * energy[-1, p] * u.eV) - gen.energy_to_nm(
+                ax2.plot(i, gen.energy_to_wave(leg_e(i) * energy[-1, p] * u.eV) - gen.energy_to_wave(
                     e_poly_linear(i) * energy[-1, p] * u.eV), '.',
                          markersize=10, label=f'Order {spectro.orders[::-1][m]}')
             ax2.legend()
