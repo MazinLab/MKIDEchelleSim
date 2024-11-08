@@ -84,6 +84,8 @@ if __name__ == '__main__':
     parser.add_argument('--fov', default=1, type=float, help='Field of view [arcsec2].')
     parser.add_argument('--simpconvol', action='store_true', default=False,
                         help='If passed, indicates that a faster, simplified convolution should be conducted.')
+    parser.add_argument('--wave_convol', action='store_true', default=False,
+                        help='If passed, indicates that the MKID convolution is w.r.t wavelength instead of energy.')
     parser.add_argument('--on_sky', action='store_true', default=False,
                         help='If passed, the observation is conducted "on-sky" instead of in the laboratory and'
                              'indicates the spectrum will be atmospherically/telescopically attenuated and have'
@@ -154,6 +156,8 @@ if __name__ == '__main__':
         on_sky=args.on_sky,
         simpconvol=args.simpconvol
     )
+    
+    E_convol = False if args.wave_convol else True
 
     # ==================================================================================================================
     # CHECK FOR OR CREATE DIRECTORIES
@@ -256,35 +260,23 @@ if __name__ == '__main__':
     clipped_spectrum = clip_spectrum(x=bandpass_spectrum, clip_range=(sim.minwave, sim.maxwave))
 
     # blaze spectrum and directly integrate into pixel space to verify:
-    blazed_spectrum, masked_waves, masked_blaze = eng.blaze(wave=clipped_spectrum.waveset, spectra=clipped_spectrum(clipped_spectrum.waveset))
-    blazed_int_spec = np.array([
-        eng.lambda_to_pixel_space(
-            array_wave=clipped_spectrum.waveset,
-            array=blazed_spectrum[i],
-            leftedge=lambda_left[i]
-        ) for i in range(nord)
-    ])
+    blazed_spectrum, masked_waves, masked_blaze = eng.blaze(wave=clipped_spectrum.waveset,
+                                                            spectra=clipped_spectrum(clipped_spectrum.waveset))
 
     # optically-broaden spectrum:
     broadened_spectrum = eng.optically_broaden(wave=clipped_spectrum.waveset, flux=blazed_spectrum)
-    broad_int_spec = np.array([
-        eng.lambda_to_pixel_space(
-            array_wave=clipped_spectrum.waveset,
-            array=broadened_spectrum[i],
-            leftedge=lambda_left[i]
-        ) for i in range(nord)
-    ])
 
     # conducting the convolution with MKID resolution widths:
     convol_wave, convol_result, mkid_kernel = eng.convolve_mkid_response(wave=clipped_spectrum.waveset,
                                                                          spectral_fluxden=broadened_spectrum,
                                                                          oversampling=args.osamp,
-                                                                         n_sigma_mkid=args.nsig, simp=sim.simpconvol)
+                                                                         n_sigma_mkid=args.nsig, simp=sim.simpconvol,
+                                                                         energy=E_convol)
 
     # putting convolved spectrum through MKID observation sequence:
     photons, observed, reduce_factor = detector.observe(convol_wave=convol_wave, convol_result=convol_result,
                                                         minwave=sim.minwave, maxwave=sim.maxwave,
-                                                        exptime=sim.exptime, area=sim.telearea)
+                                                        exptime=sim.exptime, area=sim.telearea, energy=E_convol)
 
     # saving final photon list to h5 file, store linear phase conversion in header:
     h5_file = f'{args.outdir}/{sim.type_spectra}.h5'
@@ -332,6 +324,14 @@ if __name__ == '__main__':
         photons_binned = (
                 photons_binned * u.ph * reduce_factor[None, :] / (sim.exptime.to(u.s) * sim.telearea.to(u.cm ** 2))).to(
             u.ph / u.cm ** 2 / u.s).value
+
+        blazed_int_spec = np.array([
+            eng.lambda_to_pixel_space(
+                array_wave=clipped_spectrum.waveset,
+                array=blazed_spectrum[i],
+                leftedge=lambda_left[i]
+            ) for i in range(nord)
+        ])
 
         """Plotting only below"""
         # phase/pixel space plot to verify that phases are within proper values and orders are more-or-less visible
