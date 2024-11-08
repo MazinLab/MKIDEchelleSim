@@ -2,8 +2,9 @@ import numpy as np
 import astropy.units as u
 import logging
 from scipy.constants import c
+from astropy.constants import h, c
 
-from general import wave_to_eV
+from ucsbsim.mkidspec.utils.general import wave_to_energy
 from ucsbsim.filterphot import mask_deadtime
 from ucsbsim.mkidspec.engine import draw_photons
 from mkidpipeline.photontable import Photontable
@@ -23,12 +24,6 @@ def sorted_table(table: Photontable, resid_map):
     return [phases[j].tolist() for j in idx]
 
 
-def lasercal(phot_phases, phase_offset, minw, maxw, lasers=[400, 600, 800], error=0.05):
-    laser_phase = np.multiply(wave_to_phase(lasers, minw, maxw)*phase_offset,np.random.uniform(1-error, 1+error, len(lasers)))
-    sol_phase = np.poly1d(np.polyfit(lasers, laser_phase, len(lasers)-1))
-    return np.poly1d(np.polyfit(laser_phase, lasers, len(lasers)-1))(phot_phases), sol_phase
-
-
 def wave_to_phase(waves, minwave, maxwave):
     """
     :param waves: wavelengths in nm
@@ -36,6 +31,7 @@ def wave_to_phase(waves, minwave, maxwave):
     :param maxwave: maximum wavelength of spectrograph
     :return: phase values corresponding to wavelength
     """
+    # TODO make into energy to phase
     if isinstance(waves, u.Quantity):
         waves = waves.to(u.nm).value
     shape = np.shape(waves)
@@ -86,7 +82,7 @@ class MKIDDetector:
         self.n_pixels = n_pix
         self.pixel_size = pixel_size
         self.length = self.n_pixels * pixel_size
-        self.waveR0 = l0
+        self.l0 = l0
         self.design_R0 = design_R0
         self.pixel_indices = np.arange(self.n_pixels, dtype=int)
         if R0s is None:
@@ -98,6 +94,7 @@ class MKIDDetector:
         else:
             self.pixel_phase_offsets = phase_offsets
         self.resid_map = resid_map
+
 
     def R0(self, pixel: int):
         """
@@ -112,42 +109,55 @@ class MKIDDetector:
             raise ValueError('The user-supplied array of R0s and design R0 do not match.')
         return self.R0s[pixel.astype(int)]
 
+
     def mkid_constant(self, pixel):
         """
         :param pixel: the pixel index or indices
         :return: MKID constant for given pixel, R0*l0
         """
-        return self.R0(pixel) * self.waveR0
+        return self.R0(pixel) * self.l0
 
-    def mkid_resolution_width(self, wave, pixel):
+
+    def mkid_resolution_width(self, wave, pixel, energy=False):
         """
         :param wave: wavelength(s) as u.Quantity
         :param pixel: the pixel index or indices
-        :return: FWHM of the MKID at given wavelength and pixel
+        :param energy: True to pass and return energy
+        :return: FWHM of the MKID at given wavelength/energy and pixel
         """
-        rc = self.mkid_constant(pixel)
-        try:
-            if wave.shape != rc.shape:
-                if wave.ndim == rc.ndim:
-                    raise ValueError('Arrays of the same dimensions much have matching shapes')
-                if wave.shape[-1] != rc.shape[-1]:
-                    raise ValueError('Arrays of differing dimension must match along the final dimension')
-                rc = rc[None, :]
-        except AttributeError:  # allow non-array args
-            pass
-        return wave ** 2 / rc
+        if energy:
+            wave = wave.to(u.nm, equivalencies=u.spectral())
+        else:
+            rc = self.mkid_constant(pixel)
 
-    def observe(self, convol_wave, convol_result, phase: bool = True, minwave=None, maxwave=None, **kwargs):
+            try:
+                if wave.shape != rc.shape:
+                    if wave.ndim == rc.ndim:
+                        raise ValueError('Arrays of the same dimensions much have matching shapes')
+                    if wave.shape[-1] != rc.shape[-1]:
+                        raise ValueError('Arrays of differing dimension must match along the final dimension')
+                    rc = rc[None, :]
+            except AttributeError:  # allow non-array args
+                pass
+
+        if energy:
+            return (wave**2*wave.to(u.eV, equivalencies=u.spectral())**2/ (self.R0(pixel)*self.l0*h*c)).decompose().to(u.eV)
+        else:
+            return wave ** 2 / rc
+
+
+    def observe(self, convol_wave, convol_result, phase: bool = True, minwave=None, maxwave=None, energy=False, **kwargs):
         """
         :param convol_wave: wavelength array that matches convol_result
         :param convol_result: convolution array
         :param bool phase: True if resulting recarray to be in phase values not wavelength
         :param minwave: pass value of spectrograph minwave for phase=True
         :param maxwave: pass value of spectrograph maxwave for phase=True
+        :param energy: True to conduct observation in energies
         :param kwargs: additional keyword args to pass to draw_photons (exptime, area, etc.)
         :return: recarray of observed photons, total number observed
         """
-        arrival_times, arrival_wavelengths, reduce_factor = draw_photons(convol_wave, convol_result, **kwargs)
+        arrival_times, arrival_wavelengths, reduce_factor = draw_photons(convol_wave, convol_result, energy=energy, **kwargs)
 
         from mkidcore.binfile.mkidbin import PhotonNumpyType
         pixel_count = np.array([x.size for x in arrival_times])
@@ -183,7 +193,7 @@ class MKIDDetector:
             a_times = arrival_times[pixel]
             arrival_order = a_times.argsort()
             a_times = a_times[arrival_order]
-            energies = 1 / arrival_wavelengths[pixel].to(u.um)[arrival_order]
+            energies = 1 / arrival_wavelengths[pixel].to(u.um, equivalencies=u.spectral())[arrival_order]
 
             # merge photon energies within 1us
             to_merge = (np.diff(a_times) < merge_time_window_s).nonzero()[0]
