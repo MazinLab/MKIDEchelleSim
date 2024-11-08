@@ -1,4 +1,4 @@
-# The MKID Spectrometer Simulation and Pipeline
+# The MKID Echelle Spectrograph Simulator and Data Reduction Pipeline
 ### Introduction
 
 This package contains 2 core scripts:
