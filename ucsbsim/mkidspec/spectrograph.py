@@ -1,5 +1,6 @@
 import numpy as np
 import astropy.units as u
+from astropy.constants import h, c
 import logging
 
 from ucsbsim.mkidspec.detector import MKIDDetector
@@ -29,11 +30,13 @@ class GratingSetup:
         self.d = groove_length
         self.empiric_blaze_factor = 1.0
 
+
     def __str__(self) -> str:
         return (f"alpha={np.rad2deg(self.alpha):.2f}\n"
                 f"delta={np.rad2deg(self.delta):.2f}\n"
                 f"beta={np.rad2deg(self.beta_center):.2f}\n"
                 f"l={self.d.to('mm'):.2f}/l ({1 / self.d.to('mm'):.2f})")
+
 
     def blaze(self, beta, m):
         """
@@ -55,21 +58,31 @@ class GratingSetup:
         ret = k * np.sinc((m * rho * q4).value) ** 2  # omit np.pi as np.sinc includes it
         return self.empiric_blaze_factor * ret
 
-    def beta(self, wave, m):
+
+    def beta(self, wave, m, energy=False):
         """
         :param wave: wavelength(s) as u.Quantity
         :param m: order
+        :param energy: True to pass energy
         :return: reflectance angle in radians
         """
+        if energy:
+            wave = wave.to(u.nm, equivalencies=u.spectral())
         return np.arcsin(m * wave / self.d - np.sin(self.alpha))
 
-    def wave(self, beta, m):
+
+    def wave(self, beta, m, energy=False):
         """
         :param beta: reflectance angle in radians
         :param m: order
+        :param energy: True to return energy
         :return: the wavelength of beta in that order
         """
-        return self.d * (np.sin(beta) + np.sin(self.alpha)) / m
+        if energy:
+            (self.d * (np.sin(beta) + np.sin(self.alpha)) / m).to(u.eV, equivalencies=u.spectral())
+        else:
+            return self.d * (np.sin(beta) + np.sin(self.alpha)) / m
+
 
     def resolution(self, entrance_beam_size: u.Quantity, order):
         """
@@ -78,6 +91,7 @@ class GratingSetup:
         :return: the limited resolution of the grating configuration
         """
         return order * entrance_beam_size / (self.d * np.cos(self.alpha))
+
 
     def resolution_eff(self,
                        entrance_beam_size: u.Quantity,
@@ -96,13 +110,19 @@ class GratingSetup:
         """
         return self.resolution(entrance_beam_size, order) * wave / (phi * tele_d)
 
-    def angular_dispersion(self, m, beta):
+
+    def angular_dispersion(self, m, beta, energy=False):
         """
         :param m: order
         :param beta: reflectance angle
+        :param energy: pass energy(s) to return dbeta/dE
         :return: angular dispersion [rad/wavelength], Schroder A dbeta/dlambda
         """
-        return m / (self.d * np.cos(beta)) * u.rad
+        if energy:
+            wave = self.wave(beta, m)
+            return ((m / (self.d * np.cos(beta)) * u.rad)*(h*c/wave.to(u.eV, equivalencies=u.spectral())**2)).decompose().to(u.rad/u.eV)
+        else:
+            return m / (self.d * np.cos(beta)) * u.rad
 
 
 class SpectrographSetup:
@@ -142,20 +162,21 @@ class SpectrographSetup:
         # (and that the slit image is a gaussian)
         self.nondimensional_lsf_width = 1 / self.design_res
         logger.info(f'The spectrograph has been setup with the following properties:'
-                     f'\n\tl0: {self.l0}'
-                     f'\n\tR0: {self.detector.design_R0}'
-                     f'\n\tOrders: {self.orders}'
-                     f'\n\tFocal length: {self.focal_length}'
-                     f'\n\tIncidence angle: {np.rad2deg(self.grating.alpha):.3f}'
-                     f'\n\tReflectance angle: {np.rad2deg(self.beta_central_pixel):.2f}'
-                     f'\n\tGroove length: {self.grating.d:.2f}'
-                     f'\n\t# of pixels: {self.detector.n_pixels}'
-                     f'\n\tPixel size: {self.detector.pixel_size}'
-                     f'\n\tPixels per res. element: {self.nominal_pixels_per_res_elem}')
+                    f'\n\tl0: {self.l0}'
+                    f'\n\tR0: {self.detector.design_R0}'
+                    f'\n\tOrders: {self.orders}'
+                    f'\n\tFocal length: {self.focal_length}'
+                    f'\n\tIncidence angle: {np.rad2deg(self.grating.alpha):.3f}'
+                    f'\n\tReflectance angle: {np.rad2deg(self.beta_central_pixel):.2f}'
+                    f'\n\tGroove length: {self.grating.d:.2f}'
+                    f'\n\t# of pixels: {self.detector.n_pixels}'
+                    f'\n\tPixel size: {self.detector.pixel_size}'
+                    f'\n\tPixels per res. element: {self.nominal_pixels_per_res_elem}')
+
 
     def set_beta_center(self, beta, littrow: bool = False):
         """
-        :param beta: reflectance angle in degrees
+        :param beta: reflectance angle in degrees or u.Quantity
         :param littrow: whether alpha=beta
         :return: changes the reflectance angle of the central pixel (may change alpha if littrow)
         """
@@ -165,6 +186,7 @@ class SpectrographSetup:
         if littrow:
             self.grating.alpha = beta
 
+
     @property
     def orders(self):
         try:
@@ -173,9 +195,13 @@ class SpectrographSetup:
             self._orders = (self.m0, self.m_max), np.arange(self.m0, self.m_max + 1, dtype=int)
         return self._orders[1]
 
-    @property
-    def minimum_wave(self):
-        return self.central_wave(self.m_max) - self.fsr(self.m_max) / 2
+
+    def minimum_wave(self, energy=False):
+        if energy:
+            return (self.central_wave(self.m_max) - self.fsr(self.m_max) / 2).to(u.eV, equivalencies=u.spectral())
+        else:
+            return self.central_wave(self.m_max) - self.fsr(self.m_max) / 2
+
 
     def info_str(self):
         gstr = str(self.grating)
@@ -195,6 +221,7 @@ class SpectrographSetup:
             ret.append(f"    m{o:2} @ {w_c:.0f}: {w_i:.0f} - {w_f:.0f}, {p_i:.0f} - {p_f:.0f}")
         return ret
 
+
     def pixel_for_beta(self, beta):
         """
         :param beta: reflectance angle in radians
@@ -202,6 +229,7 @@ class SpectrographSetup:
         """
         delta_angle = np.tan(beta - self.beta_central_pixel)
         return self.focal_length * delta_angle / self.detector.pixel_size + self.detector.n_pixels / 2
+
 
     def beta_for_pixel(self, pixel):
         """
@@ -218,12 +246,14 @@ class SpectrographSetup:
         """
         return self.grating.beta(self.l0, self.m0)
 
+
     @property
     def min_beta_mmax(self):
         """
         :return: smallest reflectance angle (which is at the final order)
         """
-        return self.grating.beta(self.minimum_wave, self.m_max)
+        return self.grating.beta(self.minimum_wave(), self.m_max)
+
 
     def blaze(self, wave):
         """
@@ -231,6 +261,7 @@ class SpectrographSetup:
         :return: blaze throughput out of 1
         """
         return self.grating.blaze(self.grating.beta(wave, self.orders[:, None]), self.orders[:, None])
+
 
     def mean_blaze_eff_est(self, n=10):
         """
@@ -247,12 +278,17 @@ class SpectrographSetup:
         v = self.blaze(np.array(list(map(lambda x: np.linspace(*x, num=n), ow))) * u.nm).mean(1)
         return v.value
 
-    def order_mask(self, wave, fsr_edge: bool = False):
+
+    def order_mask(self, wave, fsr_edge: bool = False, energy=False):
         """
         :param wave: wavelength(s) as u.Quantity
         :param bool fsr_edge: True to mask at the FSR, goes to detector edge if not
+        :param energy: True to pass energies
         :return: a boolean array [norders, wave.size] where true means wavelengths are in that order
         """
+        if energy:
+            wave = wave.to(u.nm, equivalencies=u.spectral())
+
         if fsr_edge:
             o = self.orders[:, None]
             c_wave = self.pixel_to_wavelength(self.detector.n_pixels / 2, o)
@@ -261,6 +297,7 @@ class SpectrographSetup:
         else:
             x = self.wavelength_to_pixel(wave, self.orders[:, None])
             return (x >= 0) & (x < self.detector.n_pixels)
+
 
     def edge_wave(self, fsr=True):
         """
@@ -277,13 +314,20 @@ class SpectrographSetup:
 
         return fsr_edges
 
-    def central_wave(self, order):
+
+    def central_wave(self, order, energy=False):
         """
         :param order: order number
+        :param energy: True to return energy
         :return: wavelength at the center of the order
         """
         l0_center = self.l0 / (1 + 1 / (2 * self.m0))
-        return l0_center * self.m0 / order
+        
+        if energy:
+            return (l0_center * self.m0 / order).to(u.eV, equivalencies=u.spectral())
+        else:
+            return l0_center * self.m0 / order
+
 
     def fsr(self, order):
         """
@@ -292,25 +336,36 @@ class SpectrographSetup:
         """
         return self.central_wave(order) / order
 
-    def wavelength_to_pixel(self, wave, m):
+
+    def wavelength_to_pixel(self, wave, m, energy=False):
         """
         :param wave: wavelength(s) as u.Quantity
         :param m: order
+        :param energy: True to pass energy
         :return: fractional pixel location of given wavelength
         """
+        if energy:
+            wave = wave.to(u.nm, equivalencies=u.spectral())
         return self.pixel_for_beta(self.grating.beta(wave, m))
 
-    def pixel_to_wavelength(self, pixel, m):
+
+    def pixel_to_wavelength(self, pixel, m, energy=False):
         """
         :param pixel: pixel
         :param m: order
+        :param energy: True to return energy
         :return: wavelength for given pixel as u.Quantity
         """
-        return self.grating.wave(self.beta_for_pixel(pixel), m)
+        if energy:
+            return self.grating.wave(self.beta_for_pixel(pixel), m).to(u.eV, equivalencies=u.spectral())
+        else:
+            return self.grating.wave(self.beta_for_pixel(pixel), m)
 
-    def pixel_wavelengths(self, edge=None):
+
+    def pixel_wavelengths(self, edge=None, energy=False):
         """
         :param edge: left or right indicates the edges of the pixel instead of exactly at center
+        :param energy: True to return energy
         :return:  array of pixel center (or left/right edge) wavelengths for every order
 
         Note that wavelengths will be computed outside each order's FSR.
@@ -318,94 +373,120 @@ class SpectrographSetup:
         (np.linspace(-.5, .5, num=detector.n_pixels) * self.fsr(m0) + self.central_wave(m0)) * (m0/self.orders)[:,None]
         """
         if edge == 'left':
-            return self.pixel_to_wavelength(self.detector.pixel_indices, self.orders[:, None])
+            wave = self.pixel_to_wavelength(self.detector.pixel_indices, self.orders[:, None])
         elif edge == 'right':
-            return self.pixel_to_wavelength(self.detector.pixel_indices + 1, self.orders[:, None])
+            wave = self.pixel_to_wavelength(self.detector.pixel_indices + 1, self.orders[:, None])
         else:
-            return self.pixel_to_wavelength(self.detector.pixel_indices + .5, self.orders[:, None])
+            wave = self.pixel_to_wavelength(self.detector.pixel_indices + .5, self.orders[:, None])
 
-    @property
-    def dl_pix_max_wave(self):
+        if energy:
+            return wave.to(u.eV, equivalencies=u.spectral())
+        else:
+            return wave
+
+
+    def dl_pix_max_wave(self, energy=False):
         """
+        :param energy: True to return dE
         :return: maximum change in wavelength in any pixel
         """
-        return self.pixel_scale / self.grating.angular_dispersion(self.m0, self.max_beta_m0)
+        return self.pixel_scale / self.grating.angular_dispersion(self.m0, self.max_beta_m0, energy=energy)
 
-    @property
-    def dl_pix_min_wave(self):
+
+    def dl_pix_min_wave(self, energy=False):
         """
+        :param energy: True to return dE
         :return: minimum change in wavelength in any pixel
         """
-        return self.pixel_scale / self.grating.angular_dispersion(self.m_max, self.min_beta_mmax)
+        return self.pixel_scale / self.grating.angular_dispersion(self.m_max, self.min_beta_mmax, energy=energy)
 
-    @property
-    def dl_mkid_max(self):
+
+    def dl_mkid_max(self, energy=False):
         """
+        :param energy: True to return dE
         :return: largest MKID resolution width
         """
-        return (self.l0 ** 2 / self.detector.mkid_constant(self.detector.pixel_indices)).max()
+        return (self.l0*self.l0.to(u.eV, equivalencies=u.spectral())**2/(self.detector.R0(self.detector.pixel_indices)*h*c)).max()
 
-    def sampling(self, oversampling):
+
+    def sampling(self, oversampling, energy=False):
         """
         :param oversampling: factor by which to oversample smallest wavelength extent
+        :param energy: True to return energy
         :return: size of sampling as u.Quantity
         """
-        return self.dl_pix_min_wave / oversampling
+        if energy:
+            return self.dl_pix_max_wave(energy=energy) / oversampling
+        else:
+            return self.dl_pix_min_wave() / oversampling
 
-    @property
-    def dl_pixel(self):
-        """
-        :return: change in wavelength for every pixel
-        """
-        return self.pixel_scale / self.angular_dispersion
 
-    @property
-    def dl_mkid_pixel(self):
+    def dl_pixel(self, energy=False):
         """
+        :param energy: True to return energy
+        :return: change in wavelength (energy) for every pixel
+        """
+        return self.pixel_scale / self.angular_dispersion(energy=energy)
+
+
+    def dl_mkid_pixel(self, energy=False):
+        """
+        :param energy: True to return energy
         :return: MKID resolution width for every pixel
         """
-        return self.detector.mkid_resolution_width(self.pixel_wavelengths(), self.detector.pixel_indices)
+        return self.detector.mkid_resolution_width(self.pixel_wavelengths(energy=energy), self.detector.pixel_indices, energy=energy)
 
-    def pixel_rescale(self, oversampling):
+
+    def pixel_rescale(self, oversampling, energy=False):
         """
         :param oversampling: factor by which to oversample smallest wavelength extent
+        :param energy: True to return energy
         :return: The sample size in wavelength units for every pixel. Every MKID resolution width divided by the
                  total # of samples that are in the largest width, which is the largest width divided by the
                  smallest sample size.
         """
-        return self.dl_mkid_pixel * self.sampling(oversampling) / self.dl_mkid_max
+        return (self.dl_mkid_pixel(energy=energy) * self.sampling(oversampling, energy=energy) / self.dl_mkid_max(energy=energy)).decompose().to(u.eV)
 
-    def pixel_samples_frac(self, oversampling):
+
+    def pixel_samples_frac(self, oversampling, energy=False):
         """
+        :param oversampling: factor by which to oversample smallest wavelength extent
+        :param energy: True to return energy
         :return: number of samples for every pixel, retrieved by dividing change in wavelength for a pixel
                  by the sample size for that pixel.
         """
-        return (self.dl_pixel / self.pixel_rescale(oversampling)).si.value
+        return (self.dl_pixel(energy=energy) / self.pixel_rescale(oversampling, energy=energy)).si.value
 
-    def pixel_max_npoints(self, oversampling):
+
+    def pixel_max_npoints(self, oversampling, energy=False):
         """
+        :param oversampling: factor by which to oversample smallest wavelength extent
+        :param energy: True to return energy
         :return: the maximum number of points in any given pixel, as an integer value, ensuring there is atleast one
                  sample at pixel center
         """
-        pixel_max_npoints = np.ceil(self.pixel_samples_frac(oversampling).max()).astype(int)
+        pixel_max_npoints = np.ceil(self.pixel_samples_frac(oversampling, energy=energy).max()).astype(int)
         if not pixel_max_npoints % 2:  # ensure there is a point at the pixel center
             pixel_max_npoints += 1
         return pixel_max_npoints
 
-    @property
-    def sigma_mkid_pixel(self):
+
+    def sigma_mkid_pixel(self, energy=False):
         """
+        :param energy: True to return energy
         :return: the standard deviation for each pixel resolution
         """
-        return self.dl_mkid_pixel / 2.355
+        return self.dl_mkid_pixel(energy=energy) / 2.355
 
-    @property
-    def angular_dispersion(self):
+
+    def angular_dispersion(self, energy=False):
         """
+        :param energy: True to return energy
         :return: The angular dispersion at the center of each pixel for each order (nord, npixel)
         """
         beta = self.beta_for_pixel(self.detector.pixel_indices + .5)
-        return self.grating.angular_dispersion(self.orders[:, None], beta)
+        return self.grating.angular_dispersion(self.orders[:, None], beta, energy=energy)
+
 
     @property
     def design_res(self):
@@ -415,6 +496,7 @@ class SpectrographSetup:
         """
         dlambda = self.fsr(self.m0) / self.detector.n_pixels * self.nominal_pixels_per_res_elem
         return self.l0 / dlambda
+
 
     @property
     def average_res(self):
