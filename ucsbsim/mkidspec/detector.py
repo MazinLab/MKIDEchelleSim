@@ -146,7 +146,8 @@ class MKIDDetector:
             return wave ** 2 / rc
 
 
-    def observe(self, convol_wave, convol_result, phase: bool = True, minwave=None, maxwave=None, energy=False, **kwargs):
+    def observe(self, convol_wave, convol_result, phase: bool = True, minwave=None, maxwave=None, energy=False, 
+                randomseed=None, **kwargs):
         """
         :param convol_wave: wavelength array that matches convol_result
         :param convol_result: convolution array
@@ -155,9 +156,11 @@ class MKIDDetector:
         :param maxwave: pass value of spectrograph maxwave for phase=True
         :param energy: True to conduct observation in energies
         :param kwargs: additional keyword args to pass to draw_photons (exptime, area, etc.)
+        :param randomseed: random seed
         :return: recarray of observed photons, total number observed
         """
-        arrival_times, arrival_wavelengths, reduce_factor = draw_photons(convol_wave, convol_result, energy=energy, **kwargs)
+        arrival_times, arrival_wavelengths, reduce_factor = draw_photons(convol_wave, convol_result, energy=energy,
+                                                                         randomseed=randomseed, **kwargs)
 
         from mkidcore.binfile.mkidbin import PhotonNumpyType
         pixel_count = np.array([x.size for x in arrival_times])
