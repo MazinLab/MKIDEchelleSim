@@ -1,8 +1,10 @@
+# global imports
 import numpy as np
 import matplotlib.pyplot as plt
 import astropy.units as u
 from astropy.constants import R_sun
 
+# local imports
 from ucsbsim.mkidspec.spectrograph import GratingSetup, SpectrographSetup
 from ucsbsim.mkidspec.detector import MKIDDetector
 import ucsbsim.mkidspec.engine as engine
@@ -10,32 +12,32 @@ import ucsbsim.mkidspec.engine as engine
 class SpecSimSettings:
     def __init__(
             self,
-            minwave_nm: float,
-            maxwave_nm: float,
-            npix: int,
-            pixelsize_um: float,
-            designR0: float,
-            l0_nm: float,
-            alpha_deg: float,
-            delta_deg: float,
-            beta_deg: float,
-            groove_length_nm: float,
-            m0: int,
-            m_max: int,
-            pixels_per_res_elem: float,
-            focallength_mm: float,
-            R0s_file: str = None,
-            phaseoffset_file: str = None,
+            minwave_nm: float = None,
+            maxwave_nm: float = None,
+            npix: int = None,
+            pixelsize_um: float = None,
+            designR0: float = None,
+            l0_nm: float = None,
+            alpha_deg: float = None,
+            delta_deg: float = None,
+            beta_deg: float = None,
+            groove_length_nm: float = None,
+            m0: int = None,
+            m_max: int = None,
+            pixels_per_res_elem: float = None,
+            focallength_mm: float = None,
             resid_file: str = None,
-            type_spectra: str = None,
+            type_spectrum: str = None,
             spec_file: str = None,
             exptime_s: float = None,
             telearea_cm2: float = None,
+            fov: float = None,
             distance_ps: float = None,
             radius_Rsun: float = None,
             temp_K: float = None,
             on_sky: bool = None,
-            simpconvol: bool = None
+            simpconvol: bool = None,
+            randomseed: int = None
     ):
         """
         :param float minwave_nm: The minimum wavelength of the spectrometer in nm.
@@ -52,18 +54,18 @@ class SpecSimSettings:
         :param int m_max: The final order, at the shorter wavelength end.
         :param float pixels_per_res_elem: Number of pixels per spectral resolution element for the spectrograph.
         :param float focallength_mm: The focal length of the detector in mm.
-        :param str R0s_file: Directory/filename of the R0s file.
-        :param str phaseoffset_file: Directory/filename of the pixel phase center offsets file.
         :param str resid_file: Directory/filename of the resonator IDs file.
-        :param str type_spectra: The type of spectrum to be simulated.
+        :param str type_spectrum: The type of spectrum to be simulated.
         :param str spec_file: Directory/filename of the spectrum file.
         :param float exptime_s: The exposure time of the observation in seconds.
         :param float telearea_cm2: The telescope area of the observation in cm2.
+        :param float fov: The field of view of the observation in arcsec2.
         :param distance_ps: The distance to target in parsecs.
         :param radius_Rsun: The radius of the target in units of R_sun.
         :param float temp_K: The temperature of the spectrum in K.
         :param on_sky: True if the observation is simulated on sky (atmosphere, sky emission, etc.).
         :param bool simpconvol: True if conducting a simplified convolution with MKIDs.
+        :param int randomseed: Random seed for reproducing simulation.
         """
         self.minwave = float(minwave_nm) * u.nm if not isinstance(minwave_nm, u.Quantity) else minwave_nm
         self.maxwave = float(maxwave_nm) * u.nm if not isinstance(maxwave_nm, u.Quantity) else maxwave_nm
@@ -85,15 +87,14 @@ class SpecSimSettings:
         self.order_range = (int(m0), int(m_max))
         self.pixels_per_res_elem = float(pixels_per_res_elem)
         self.focallength = float(focallength_mm)*u.mm if not isinstance(focallength_mm, u.Quantity) else focallength_mm
-        self.R0s_file = R0s_file
-        self.phaseoffset_file = phaseoffset_file
         self.resid_file = resid_file
-        self.type_spectra = type_spectra
+        self.type_spectrum = type_spectrum
         self.spec_file = spec_file
         if exptime_s is not None:
             self.exptime = float(exptime_s)*u.s if not isinstance(exptime_s, u.Quantity) else exptime_s
         if telearea_cm2 is not None:
             self.telearea = float(telearea_cm2)*u.cm**2 if not isinstance(telearea_cm2, u.Quantity) else telearea_cm2
+        self.fov = fov
         if distance_ps is not None:
             self.distance = float(distance_ps) * u.parsec if not isinstance(distance_ps, u.Quantity) else distance_ps
         if radius_Rsun is not None:
@@ -102,6 +103,7 @@ class SpecSimSettings:
             self.temp = float(temp_K)
         self.on_sky = on_sky
         self.simpconvol = simpconvol
+        self.randomseed = randomseed
 
     def __eq__(self, other):
         if self.__class__ != other.__class__:
@@ -111,18 +113,30 @@ class SpecSimSettings:
     
     @property
     def detector(self):
+        """
+        :return: MKIDDetector class based on simulation settings. Random R0s and phase offsets will NOT be populated.
+        """
         return MKIDDetector(n_pix=self.npix, pixel_size=self.pixelsize, design_R0=self.designR0, l0=self.l0)
 
     @property
     def grating(self):
+        """
+        :return: GratingSetup class based on simulation settings.
+        """
         return GratingSetup(alpha=self.alpha, delta=self.delta, beta_center=self.beta, groove_length=self.groove_length)
 
     @property
     def spectrograph(self):
+        """
+        :return: SpectrographSetup class based on simulation settings.
+        """
         return SpectrographSetup(order_range=self.order_range, final_wave=self.l0,
                                 pixels_per_res_elem=self.pixels_per_res_elem,
                                 focal_length=self.focallength, grating=self.grating, detector=self.detector)
     
     @property
     def engine(self):
+        """
+        :return: Engine class based on simulation settings.
+        """
         return engine.Engine(spectrograph=self.spectrograph)
