@@ -1,6 +1,5 @@
 --type_spectrum phoenix 
 --outdir onblaze_R15 
---R0s_file R0s_15.csv 
 -et 20 
 -R0 15 
 -T 4000 
@@ -11,4 +10,4 @@
 --m0 5 
 --m_max 9 
 --focallength 350 
---plot
+--debug
