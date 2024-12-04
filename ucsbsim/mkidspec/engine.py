@@ -8,7 +8,6 @@ import astropy.units as u
 import matplotlib.pyplot as plt
 import logging
 
-from ucsbsim import sortarray
 from ucsbsim.mkidspec.plotting import quick_plot
 from lmfit import Parameters, minimize
 
@@ -88,6 +87,7 @@ def draw_photons(convol_wave,
                  area: u.Quantity = np.pi * (4 * u.cm) ** 2,
                  exptime: u.Quantity = 1 * u.s,
                  energy=False,
+                 randomseed=None
                  ):
     """
     :param convol_wave: wavelength array that matches result
@@ -95,6 +95,7 @@ def draw_photons(convol_wave,
     :param area: surface area of the telescope
     :param exptime: exposure time of the observation
     :param energy: True if photon list in energy
+    :param randomseed: random seed
     :return: the arrival times and randomly chosen wavelengths from CDF
     """
     # Now, compute the CDF from dNdE and set up an interpolating function
@@ -103,8 +104,8 @@ def draw_photons(convol_wave,
     result_p = convol_result.reshape(cdf_shape)
     wave_p = convol_wave.reshape(cdf_shape)
     sort_idx = np.argsort(wave_p, axis=0)
-    result_pix = sortarray.sort(result_p, sort_idx)  # sorting by wavelength for proper CDF shape
-    wave_pix = sortarray.sort(wave_p, sort_idx)
+    result_pix = np.take_along_axis(result_p, sort_idx, axis=0) # sorting by wavelength for proper CDF shape
+    wave_pix = np.take_along_axis(wave_p, sort_idx, axis=0)
 
     cdf = np.cumsum(result_pix, axis=0)
     rest_of_way_to_photons = area * exptime
@@ -115,10 +116,12 @@ def draw_photons(convol_wave,
     # putting Poisson draw after limiting because MKID saturation rate
     if total_photons.value.max() / exptime.value > 1000:  # max 1000 counts per pixel per second
         total_photons_ltd = (total_photons.value / total_photons.value.max() * 1000 * exptime.value).astype(int)
+        np.random.seed(randomseed)
         N = np.random.poisson(total_photons_ltd)
         # Now assume that you want N photons as a Poisson random number for each pixel
         logger.info(f'Limited to 1000 photons per pixel per second.')
     else:
+        np.random.seed(randomseed)
         N = np.random.poisson(total_photons.value.astype(int))
         total_photons_ltd = total_photons.value
         logger.info(f'Max photons per pixel per second: {N.max() / exptime.value}.')
@@ -132,10 +135,13 @@ def draw_photons(convol_wave,
     for i, (x, n) in enumerate(zip(cdf.T, N)):
         if energy:
             cdf_interp = interp.interp1d(x, wave_pix[:, i].to('eV').value, fill_value=0, bounds_error=False, copy=False)
+            np.random.seed(randomseed)
             l_photons.append(cdf_interp(np.random.uniform(0, 1, size=n)) * u.eV)
         else:
             cdf_interp = interp.interp1d(x, wave_pix[:, i].to('nm').value, fill_value=0, bounds_error=False, copy=False)
+            np.random.seed(randomseed)
             l_photons.append(cdf_interp(np.random.uniform(0, 1, size=n)) * u.nm)
+        np.random.seed(randomseed)
         t_photons.append(np.random.uniform(0, 1, size=n) * exptime)
     logger.info("Completed photon draw, obtained random arrival times and wavelengths for individual photons.")
     return t_photons, l_photons, reduce_factor
