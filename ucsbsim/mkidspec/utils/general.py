@@ -1,6 +1,7 @@
 import numpy as np
 import astropy.units as u
 from astropy.constants import h, c
+import argparse
 
 
 def gauss(x, mu, sig, A):
@@ -87,3 +88,8 @@ def energy_to_wave(energy):
     """
     return (h * c / energy).to(u.nm)
 
+
+class LoadFromFile(argparse.Action):  # parses arguments in the file and stores them in the target namespace
+    def __call__(self, parser, namespace, values, option_string=None):
+        with values as f:
+            parser.parse_args(f.read().split(), namespace)
