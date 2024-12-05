@@ -18,7 +18,7 @@ from mkidpipeline.photontable import Photontable
 from mkidpipeline.steps.buildhdf import buildfromarray  # TODO: probably defaults to MEC headers
 
 # local imports
-from ucsbsim.mkidspec.spectra import get_spectrum, apply_bandpass, AtmosphericTransmission, FilterTransmission, \
+from ucsbsim.mkidspec.spectra import get_spec, apply_bandpass, AtmosphericTransmission, FilterTransmission, \
     TelescopeTransmission, FineGrid, clip_spectrum
 from ucsbsim.mkidspec.spectrograph import GratingSetup, SpectrographSetup
 from ucsbsim.mkidspec.detector import MKIDDetector, wave_to_phase
@@ -215,15 +215,9 @@ if __name__ == '__main__':
     # SIMULATION STARTS
     # ==================================================================================================================
     # obtain spectrum:
-    spectrum = get_spectrum(spectrum_type=sim.type_spectrum, 
-                            distance=sim.distance, 
-                            radius=sim.radius, 
-                            teff=sim.temp,
-                            spec_file=sim.spec_file, 
-                            minwave=sim.minwave, 
-                            maxwave=sim.maxwave, 
-                            on_sky=sim.on_sky,
-                            fov=sim.fov)  # though all args are passed, type_spectrum determines which will be used
+    spectrum = get_spec(spectrum_type=sim.type_spectrum, distance=sim.distance, radius=sim.radius, teff=sim.temp,
+                        spec_file=sim.spec_file, minwave=sim.minwave, maxwave=sim.maxwave, on_sky=sim.on_sky,
+                        fov=sim.fov)  # though all args are passed, type_spectrum determines which will be used
     
     # populate bandpasses:
     bandpasses = [FineGrid(min=sim.minwave, max=sim.maxwave), FilterTransmission()]  # interpolating/filtering
