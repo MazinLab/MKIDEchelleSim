@@ -267,14 +267,10 @@ if __name__ == '__main__':
                                                                          energy=E_convol)
 
     # conduct MKID observation sequence:
-    photons, observed, reduce_factor = detector.observe(convol_wave=convol_wave, 
-                                                        convol_result=convol_result,
-                                                        minwave=sim.minwave,
-                                                        maxwave=sim.maxwave, 
-                                                        exptime=sim.exptime,
-                                                        area=sim.telearea, 
-                                                        energy=E_convol, 
-                                                        randomseed=sim.randomseed)
+    photons, observed, reduce_factor = detector.observe(convol_wave=convol_wave, convol_result=convol_result,
+                                                        minwave=sim.minwave, maxwave=sim.maxwave, energy=E_convol,
+                                                        randomseed=sim.randomseed, exptime=sim.exptime,
+                                                        area=sim.telearea)
     
     if plot: # phase/pixel heat map to verify that phases are within proper values and orders are visible
         # separate photons by resid (pixel) and realign (no offset):
