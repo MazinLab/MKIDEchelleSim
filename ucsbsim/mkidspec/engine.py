@@ -92,8 +92,8 @@ def draw_photons(convol_wave,
     sort_idx = np.argsort(wave_p, axis=0)
     result_pix = np.take_along_axis(result_p, sort_idx, axis=0) # sorting by wavelength for proper CDF shape
     wave_pix = np.take_along_axis(wave_p, sort_idx, axis=0)
-    wave_pix = wave_pix[:, i].to('eV').value if energy else wave_pix[:, i].to('nm').value
     wave_unit = u.eV if energy else u.nm
+    wave_pix = wave_pix.to(wave_unit).value 
 
     cdf = np.cumsum(result_pix, axis=0)
     rest_of_way_to_photons = area * exptime
@@ -117,7 +117,7 @@ def draw_photons(convol_wave,
     cdf /= total_photons
 
     logger.info("Drawing for photon wavelengths (from CDF) and arrival times (from uniform random).")
-    # Decide on wavelengths and times
+    # random CDF draw on wavelengths and random uniform draw on times
     l_photons, t_photons = [], []
     for i, (x, n) in enumerate(zip(cdf.T, N)):
         cdf_interp = interp.interp1d(x, wave_pix[:, i], fill_value=0, bounds_error=False, copy=False)

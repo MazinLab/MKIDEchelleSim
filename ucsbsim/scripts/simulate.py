@@ -219,6 +219,16 @@ if __name__ == '__main__':
                         spec_file=sim.spec_file, minwave=sim.minwave, maxwave=sim.maxwave, on_sky=sim.on_sky,
                         fov=sim.fov)  # though all args are passed, type_spectrum determines which will be used
     
+    if plot:
+        plt.grid()
+        plt.plot(spectrum.waveset.to(u.nm), spectrum(spectrum.waveset))
+        plt.title("Input Spectrum")
+        plt.xlabel('Wavelength (nm)')
+        plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
+        plt.xlim([sim.minwave.value, sim.maxwave.value])
+        plt.tight_layout()
+        plt.show()
+    
     # populate bandpasses:
     bandpasses = [FineGrid(min=sim.minwave, max=sim.maxwave), FilterTransmission()]  # interpolating/filtering
     if sim.on_sky:
@@ -231,7 +241,7 @@ if __name__ == '__main__':
     if plot:
         plt.grid()
         plt.plot(bandpass_spectrum.waveset.to(u.nm), bandpass_spectrum(bandpass_spectrum.waveset))
-        plt.title("Input Spectrum after Selected Bandpasses")
+        plt.title("Spectrum after Selected Bandpasses")
         plt.xlabel('Wavelength (nm)')
         plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
         plt.xlim([sim.minwave.value, sim.maxwave.value])
@@ -245,18 +255,18 @@ if __name__ == '__main__':
     blazed_spectrum, masked_waves, masked_blaze = eng.blaze(wave=clipped_spectrum.waveset,
                                                             spectra=clipped_spectrum(clipped_spectrum.waveset))
 
-    # optically-broaden spectrum (convolution with line spread function):
-    broadened_spectrum = eng.optically_broaden(wave=clipped_spectrum.waveset, flux=blazed_spectrum)
-
     if plot:
         plt.grid()
-        for s, o in zip(broadened_spectrum, spectro.orders):
-            plt.plot(clipped_spectrum.waveset.to(u.nm), s, label=f'Order {o}')
-        plt.title("Spectrum after Bandpasses, Blazing, & Optical-Broadening")
+        for x, y, o in zip(masked_waves, masked_blaze, spectro.orders):
+            plt.plot(x, y, label=f'Order {o}')
+        plt.title("Spectrum after Bandpasses & Blazing")
         plt.xlabel('Wavelength (nm)')
         plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
         plt.tight_layout()
         plt.show()
+
+    # optically-broaden spectrum (convolution with line spread function):
+    broadened_spectrum = eng.optically_broaden(wave=clipped_spectrum.waveset, flux=blazed_spectrum)
 
     # convolve with MKID resolution widths:
     convol_wave, convol_result, mkid_kernel = eng.convolve_mkid_response(wave=clipped_spectrum.waveset,
