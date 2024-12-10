@@ -28,7 +28,8 @@ if __name__ == "__main__":
 
     # optional script args:
     parser.add_argument('--outdir', default='outdir', type=str, help='Directory for the output files.')
-    parser.add_argument('--plot', action='store_true', default=False, help='If passed, show all plots.')
+    parser.add_argument('--plot', action='store_true', default=False, help='If passed, show plots.')
+    parser.add_argument('--debug', action='store_true', default=False, help='If passed, show debug plots.')
 
     # optional MSF args:
     parser.add_argument('--msf', default='outdir/flat.h5',
@@ -129,17 +130,20 @@ if __name__ == "__main__":
     if 'msf' in steps:
         # first separate the estimates for which pixels may be missing which orders:
         missing_order_pix = np.reshape(list(map(int, args.missing_order_pix)), (-1, 3))
-        missing_order_pix = \ 
-            [[(missing_order_pix[i, 0], missing_order_pix[i, 1]),
+        missing_order_pix = [[(missing_order_pix[i, 0], missing_order_pix[i, 1]),
               [int(o)-1 for o in str(missing_order_pix[i, 2])]] for i in range(missing_order_pix.shape[0])]
+        
+        # obtain the MKID Spread Function
         msf_obj = fitmsf(msf_table=msf_table,
                          sim=sim,
                          resid_map=sim.resid_file,
                          outdir=args.outdir,
                          bin_range=args.bin_range,
                          missing_order_pix=missing_order_pix,
-                         plot=args.plot)
+                         plot=args.plot,
+                         debug=args.debug)
     if 'wt_sort' in steps:
+        # bin the wavecal table
         wavecal_fits = ordersort(table=wavecal_table,
                                  filename='emission',
                                  msf=msf_obj,
@@ -147,6 +151,7 @@ if __name__ == "__main__":
                                  outdir=args.outdir,
                                  plot=args.plot)
     if 'wavecal' in steps:
+        # obtain the wavecal
         wavecal_file = wavecal(wavecal_fits=wavecal_fits,
                                orders=args.orders,
                                elem=args.elem,
@@ -162,6 +167,7 @@ if __name__ == "__main__":
                                outdir=args.outdir,
                                plot=args.plot)
     if 'ot_sort' in steps:
+        # bin the observation table
         obs_fits = ordersort(table=obs_table,
                              filename='observation',
                              msf=msf_obj,
@@ -169,6 +175,7 @@ if __name__ == "__main__":
                              outdir=args.outdir,
                              plot=args.plot)
     if 'extract' in steps:
+        # retrieve the extracted observation spectrum
         extract(obs_fits=obs_fits,
                 wavecal_file=wavecal_file,
                 plot=args.plot)
