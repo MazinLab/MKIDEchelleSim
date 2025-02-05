@@ -1,13 +1,9 @@
---type_spectrum phoenix 
---outdir onblaze_R15 
--et 20 
--R0 15 
--T 4000 
---on_sky 
+--outdir onblaze_5ord
 --alpha 16.29 
 --delta 16.29 
--d 6481.80363 
+-d 6481.80
 --m0 5 
 --m_max 9 
---focallength 350 
---debug
+--focal_length 350 
+-et 50
+--plot
