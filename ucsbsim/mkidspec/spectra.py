@@ -141,20 +141,22 @@ def BlackbodyModel(distance: float, radius: float, teff: float, on_sky: bool, fo
     return sp
 
 
-def FlatModel():
+def FlatModel(minwave, maxwave):
     """
     :return: model which returns the same flux density at all wavelengths
     """
     sp = SourceSpectrum(ConstFlux1D, amplitude=1e6*units.FLAM)
+    waves = np.arange(minwave.to(u.nm).value, maxwave.to(u.nm).value, 0.01) * u.nm
 
     # for the typical lab environment
     watt = 3*u.W  # typical lamp wattage
     dist = 40*u.cm  # approx distance from lamp to camera
     flux_w = watt/dist**2
-    e_sp = sp.integrate(wavelengths=np.arange(3000, 9000, 0.1), flux_unit=units.FLAM, integration_type='analytical')
+    e_sp = sp.integrate(wavelengths=waves, flux_unit=units.FLAM, integration_type='analytical')
     ratio = (flux_w/e_sp).decompose()
+
     sp = SourceSpectrum(ConstFlux1D, amplitude=1e6 * u.photlam)
-    return sp * ratio
+    return SourceSpectrum.from_spectrum1d(Spectrum1D(flux=sp(waves)*ratio, spectral_axis=waves))
 
 
 def EmissionModel(filename, minwave, maxwave, target_R=50000):
@@ -245,7 +247,7 @@ def get_spec(spectrum_type: str, distance=None, radius=None, teff=None, spec_fil
         return PhoenixModel(distance=distance, radius=radius, teff=teff, on_sky=on_sky, fov=fov)
     elif spectrum_type == 'flat':
         logger.info(f'Obtained flat-field model spectrum.')
-        return FlatModel()
+        return FlatModel(minwave, maxwave)
     elif spectrum_type == 'emission':
         logger.info(f'Obtained {spec_file} emission spectrum.')
         return EmissionModel(spec_file, minwave, maxwave)
