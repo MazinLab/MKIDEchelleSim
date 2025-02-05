@@ -7,11 +7,11 @@ import matplotlib.pyplot as plt
 import time
 
 import astropy.units as u
-from ucsbsim.mkidspec.spectra import PhoenixModel, AtmosphericTransmission, FilterTransmission, TelescopeTransmission
-from ucsbsim.mkidspec.spectrograph import GratingSetup, SpectrographSetup
-from ucsbsim.mkidspec.detector import MKIDDetector
-from ucsbsim.mkidspec.engine import Engine
-from ucsbsim.mkidspec.spectra import clip_spectrum
+from momospecsim.spectra import PhoenixModel, AtmosphericTransmission, FilterTransmission, TelescopeTransmission
+from momospecsim.spectrograph import GratingSetup, SpectrographSetup
+from momospecsim.detector import MKIDDetector
+from momospecsim.engine import Engine
+from momospecsim.spectra import clip_spectrum
 
 
 tic = time.time()

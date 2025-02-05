@@ -3,15 +3,15 @@ from setuptools import setup, find_packages
 from Cython.Build import cythonize
 
 setup(
-    name="ucsbsim",
+    name="momospecsim",
     version="0.1",
     author="MazinLab, J. Bailey, C. Kim",
-    ext_modules=cythonize("ucsbsim/filterphot.pyx"),
+    ext_modules=cythonize("filterphot.pyx"),
     include_dirs=[np.get_include()],
     author_email="mazinlab@ucsb.edu",
-    description="A UVOIR MKID Echelle Simulator",
+    description="A UVOIR MKID Echelle Spectrograph Simulator",
     long_description_content_type="text/markdown",
-    url="https://github.com/MazinLab/MKIDEchelleSim",
+    url="https://github.com/MazinLab/MOMOSpecSim",
     packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",

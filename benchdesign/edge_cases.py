@@ -10,9 +10,9 @@ import copy
 from astropy.constants import h, c
 from lmfit import Parameters, minimize
 
-from ucsbsim.mkidspec.spectrograph import GratingSetup, SpectrographSetup
-from ucsbsim.mkidspec.detector import MKIDDetector, wave_to_phase
-from ucsbsim.mkidspec.utils.general import nearest_idx, gauss
+from momospecsim.spectrograph import GratingSetup, SpectrographSetup
+from momospecsim.detector import MKIDDetector, wave_to_phase
+from momospecsim.utils.general import nearest_idx, gauss
 
 """
 The purpose of these methods is to determine the set of grating and spectrograph design parameters that result in

@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 import time
 import astropy.units as u
 
-from ucsbsim.mkidspec.spectrograph import GratingSetup, SpectrographSetup, NEWPORT_GRATINGS
-from ucsbsim.mkidspec.detector import MKIDDetector
+from momospecsim.spectrograph import GratingSetup, SpectrographSetup, NEWPORT_GRATINGS
+from momospecsim.detector import MKIDDetector
 
 u.photlam = u.photon / u.s / u.cm ** 2 / u.AA
 

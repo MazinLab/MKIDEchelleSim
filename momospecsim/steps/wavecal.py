@@ -13,8 +13,8 @@ import argparse
 from astropy import units as u
 import scipy.interpolate as interp
 
-from ucsbsim.mkidspec.spectrograph import SpectrographSetup
-from ucsbsim.mkidspec.spectra import EmissionModel
+from momospecsim.spectrograph import SpectrographSetup
+from momospecsim.spectra import EmissionModel
 
 sys.path.insert(1, '/home/kimc/pycharm/PyReduce/pyreduce')
 from wavelength_calibration import WavelengthCalibration, WavelengthCalibrationInitialize, LineList

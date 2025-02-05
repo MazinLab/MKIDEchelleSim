@@ -3,7 +3,7 @@ import astropy.units as u
 from astropy.constants import h, c
 import logging
 
-from ucsbsim.mkidspec.detector import MKIDDetector
+from momospecsim.detector import MKIDDetector
 
 logger = logging.getLogger('spectrograph')
 

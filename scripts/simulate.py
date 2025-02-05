@@ -18,13 +18,13 @@ from mkidpipeline.photontable import Photontable
 from mkidpipeline.steps.buildhdf import buildfromarray  # TODO: probably defaults to MEC headers
 
 # local imports
-from ucsbsim.mkidspec.spectra import get_spec, apply_bandpass, AtmosphericTransmission, FilterTransmission, \
+from momospecsim.spectra import get_spec, apply_bandpass, AtmosphericTransmission, FilterTransmission, \
     TelescopeTransmission, FineGrid, clip_spectrum
-from ucsbsim.mkidspec.spectrograph import GratingSetup, SpectrographSetup
-from ucsbsim.mkidspec.detector import MKIDDetector, wave_to_phase
-import ucsbsim.mkidspec.engine as engine
-from ucsbsim.mkidspec.simsettings import SpecSimSettings
-from ucsbsim.mkidspec.utils.general import LoadFromFile
+from momospecsim.spectrograph import GratingSetup, SpectrographSetup
+from momospecsim.detector import MKIDDetector, wave_to_phase
+import momospecsim.engine as engine
+from momospecsim.simsettings import SpecSimSettings
+from momospecsim.utils.general import LoadFromFile
 
 """
 Simulation of an MKID spectrometer observation.

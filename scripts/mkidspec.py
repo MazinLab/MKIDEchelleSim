@@ -9,13 +9,13 @@ import os
 from mkidpipeline.photontable import Photontable
 
 # local imports
-from ucsbsim.mkidspec.steps.fitmsf import fitmsf
-from ucsbsim.mkidspec.steps.ordersort import ordersort
-from ucsbsim.mkidspec.steps.wavecal import wavecal
-from ucsbsim.mkidspec.steps.extract import extract
-from ucsbsim.mkidspec.simsettings import SpecSimSettings
-from ucsbsim.mkidspec.msf import MKIDSpreadFunction
-from ucsbsim.mkidspec.utils.general import LoadFromFile
+from momospecsim.steps.fitmsf import fitmsf
+from momospecsim.steps.ordersort import ordersort
+from momospecsim.steps.wavecal import wavecal
+from momospecsim.steps.extract import extract
+from momospecsim.simsettings import SpecSimSettings
+from momospecsim.msf import MKIDSpreadFunction
+from momospecsim.utils.general import LoadFromFile
 
 
 if __name__ == "__main__":

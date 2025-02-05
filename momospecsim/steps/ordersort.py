@@ -11,14 +11,14 @@ from astropy.io import fits
 from astropy.table import Table
 import os
 
-from ucsbsim.mkidspec.spectrograph import GratingSetup, SpectrographSetup
-from ucsbsim.mkidspec.detector import MKIDDetector, wave_to_phase, sorted_table
-import ucsbsim.mkidspec.engine as engine
+from momospecsim.spectrograph import GratingSetup, SpectrographSetup
+from momospecsim.detector import MKIDDetector, wave_to_phase, sorted_table
+import momospecsim.engine as engine
 from synphot.models import BlackBodyNorm1D, ConstFlux1D
 from synphot import SourceSpectrum
-from ucsbsim.mkidspec.msf import MKIDSpreadFunction
+from momospecsim.msf import MKIDSpreadFunction
 from mkidpipeline.photontable import Photontable
-import ucsbsim.mkidspec.utils.general as gen
+import momospecsim.utils.general as gen
 
 """
 Application of the virtual pixel boundaries and errors on an spectrum using the MSF products. The steps are:
