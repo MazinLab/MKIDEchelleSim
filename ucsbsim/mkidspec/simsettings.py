@@ -25,7 +25,7 @@ class SpecSimSettings:
             m0: int = None,
             m_max: int = None,
             pixels_per_res_elem: float = None,
-            focallength_mm: float = None,
+            focal_length_mm: float = None,
             resid_file: str = None,
             type_spectrum: str = None,
             spec_file: str = None,
@@ -53,7 +53,7 @@ class SpecSimSettings:
         :param int m0: The initial order, at the longer wavelength end.
         :param int m_max: The final order, at the shorter wavelength end.
         :param float pixels_per_res_elem: Number of pixels per spectral resolution element for the spectrograph.
-        :param float focallength_mm: The focal length of the detector in mm.
+        :param float focal_length_mm: The focal length of the detector in mm.
         :param str resid_file: Directory/filename of the resonator IDs file.
         :param str type_spectrum: The type of spectrum to be simulated.
         :param str spec_file: Directory/filename of the spectrum file.
@@ -86,7 +86,7 @@ class SpecSimSettings:
                                                                             u.Quantity) else groove_length_nm
         self.order_range = (int(m0), int(m_max))
         self.pixels_per_res_elem = float(pixels_per_res_elem)
-        self.focallength = float(focallength_mm)*u.mm if not isinstance(focallength_mm, u.Quantity) else focallength_mm
+        self.focal_length = float(focal_length_mm)*u.mm if not isinstance(focal_length_mm, u.Quantity) else focal_length_mm
         self.resid_file = resid_file
         self.type_spectrum = type_spectrum
         self.spec_file = spec_file
@@ -132,7 +132,7 @@ class SpecSimSettings:
         """
         return SpectrographSetup(order_range=self.order_range, final_wave=self.l0,
                                 pixels_per_res_elem=self.pixels_per_res_elem,
-                                focal_length=self.focallength, grating=self.grating, detector=self.detector)
+                                focal_length=self.focal_length, grating=self.grating, detector=self.detector)
     
     @property
     def engine(self):
