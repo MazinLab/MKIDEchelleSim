@@ -56,7 +56,7 @@ if __name__ == '__main__':
     parser.add_argument('--outdir', default='outdir', type=str, help='Directory for output files.')
     parser.add_argument('-rs', '--randomseed', default=10, type=int,
                         help='Random seed for reproducibility.')
-    parser.add_argument('--resid_file', default='resids.csv', type=str,
+    parser.add_argument('--resid_file', default='outdir/resids.csv', type=str,
                         help="Filename of the resonator IDs, will be created if it doesn't exist.")
     parser.add_argument('-sf', '--spec_file', default=None,
                         help='Directory/filename of spectrum, REQUIRED if spectrum is "emission" or "from_file".')
@@ -98,13 +98,13 @@ if __name__ == '__main__':
     parser.add_argument('--beta', default='littrow',
                         help="Diffraction angle at the central pixel [deg]. Pass 'littrow' to be equal to 'alpha'.")
     parser.add_argument('--delta', default=63, type=float, help='Blaze angle [deg].')
-    parser.add_argument('-d', '--groove_length', default=((1 / 316) * u.mm).to(u.nm).value, type=float,
-                        help='The groove length of the grating [nm].')
+    parser.add_argument('-d', '--groove_length', default=3164.56, type=float,
+                        help='The groove length of the grating [nm].')   # 316 lines per mm
     parser.add_argument('--m0', default=4, type=int, help='The initial order.')
     parser.add_argument('--m_max', default=7, type=int, help='The final order.')
     parser.add_argument('-ppre', '--pixels_per_res_elem', default=2.5, type=float,
                         help='Number of pixels per spectrograph resolution element.')
-    parser.add_argument('--focallength', default=300, type=float,
+    parser.add_argument('--focal_length', default=300, type=float,
                         help='The focal length of the detector [mm].')
     parser.add_argument('--plot', action='store_true', default=False, help='If passed, shows final plots.')
     parser.add_argument('--debug', default=False, action='store_true',
@@ -131,7 +131,7 @@ if __name__ == '__main__':
         m0=args.m0,
         m_max=args.m_max,
         pixels_per_res_elem=args.pixels_per_res_elem,
-        focallength_mm=args.focallength,
+        focal_length_mm=args.focal_length,
         resid_file=args.resid_file,
         type_spectrum=args.type_spectrum,
         spec_file=args.spec_file,
@@ -202,7 +202,7 @@ if __name__ == '__main__':
     spectro = SpectrographSetup(order_range=sim.order_range, 
                                 final_wave=sim.l0,
                                 pixels_per_res_elem=sim.pixels_per_res_elem,
-                                focal_length=sim.focallength, 
+                                focal_length=sim.focal_length, 
                                 grating=sim.grating, 
                                 detector=detector)
     eng = engine.Engine(spectrograph=spectro)
@@ -347,20 +347,18 @@ if __name__ == '__main__':
         # plotting comparison between flux-integrated spectrum, integrated/convolved spectrum, & final counts FSR-binned
         plt.grid()
         for n in range(nord-1):
-            plt.plot(lambda_pixel[n], blazed_int_spec[n], color='b')
-            plt.plot(lambda_pixel[n], convol_sum[n], color='red', linewidth=1.5, alpha=0.4)
             plt.plot(lambda_pixel[n], photons_binned[::-1][n], color='k', linewidth=1, linestyle='--')
+            plt.plot(lambda_pixel[n], convol_sum[n], color='red', linewidth=1.5, alpha=0.5)
+            plt.plot(lambda_pixel[n], blazed_int_spec[n], color='b')
 
         plt.ylabel(r"Flux (phot $cm^{-2} s^{-1})$")
         plt.xlabel('Wavelength (nm)')
         plt.title('Comparison of Pre/Post-Convolution and Photon Table Spectrum')
-        plt.plot(lambda_pixel[-1], blazed_int_spec[-1], color='b', label='Pre-Convolution')
-        plt.plot(lambda_pixel[-1], convol_sum[-1], color='r', linewidth=1.5, alpha=0.4, label='Post-Convolution')
         plt.plot(lambda_pixel[-1], photons_binned[::-1][-1], color='k', linewidth=1, linestyle='--',
-                     label='Photon Table Binned')
-        
+                 label='Photon Table Binned')
+        plt.plot(lambda_pixel[-1], convol_sum[-1], color='r', linewidth=1.5, alpha=0.5, label='Post-Convolution')
+        plt.plot(lambda_pixel[-1], blazed_int_spec[-1], color='b', label='Pre-Convolution')
         plt.tight_layout()
         plt.legend()
         plt.show()
-
     logger.info(msg=f'Simulation complete. Total time: {((time.perf_counter() - tic) / 60):.2f} min. Exiting.')
