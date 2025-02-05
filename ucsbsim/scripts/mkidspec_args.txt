@@ -1,0 +1,6 @@
+--outdir onblaze_R10 
+--msf onblaze_R10/msf.pkl 
+--missing_order_pix 0 999 1 0 999 12 1000 2047 1 1000 2047 15 
+--wavecal onblaze_R10/wavecal.npz 
+--orders 9 8 7 6 5 
+--extract onblaze_R10/phoenix.h5 --plot
