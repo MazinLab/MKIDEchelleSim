@@ -34,8 +34,7 @@ if __name__ == "__main__":
     # optional MSF args:
     parser.add_argument('--msf', default='outdir/flat.h5',
                         help='Directory/name of the flat/blackbody spectrum photon table .h5 file OR'
-                             'Directory/name of the complete MKID Spread Function .pkl file.'
-                             'Pass any other argument, such as "False", to disable this step.')
+                             'Directory/name of the complete MKID Spread Function .pkl file.')
     parser.add_argument('--bin_range', default=(-1.5, 0), type=tuple,
                         help='Start/stop range for phase histogram.')
     parser.add_argument('--missing_order_pix', nargs='*',
@@ -51,10 +50,9 @@ if __name__ == "__main__":
                              'Directory/name of the order-sorted emission lamp spectrum .fits file OR'
                              'Directory/name of the complete wavelength calibration solution .npz file.'
                              'Pass any other argument, such as "False", to disable this step.')
-    parser.add_argument('--elem', default='hgar', type=str,
-                        help="Emission lamp element(s) in use, i.e., 'hgar' for Mercury-Argon.")
-    parser.add_argument('--orders', nargs='*', default=[7, 6, 5, 4], type=list,
-                        help="Orders to be used, space-delimited.")  # TODO have order numbers mean something
+    parser.add_argument('--elem', default=None, type=str,
+                        help="Emission lamp element(s) in use, i.e., 'hgar' for Mercury-Argon. Wavecal will not"
+                             "be conducted if this argument is None.")
     parser.add_argument('--degree', default=4, type=int, help="Polynomial degree to use in wavecal.")
     parser.add_argument('--iters', default=5, type=int,
                         help="Number of iterations to loop through for identifying and discarding lines.")
@@ -62,7 +60,7 @@ if __name__ == "__main__":
                         help="If passed, indicates user should click plot to align observation and linelist.")
     parser.add_argument('--residual_max', default=85e3, type=float,
                         help="Maximum residual allowed between fit wavelength and atlas in m/s. (float)")
-    parser.add_argument('--width', default=3, type=int, help="Width in pixels for matching peaks.")
+    parser.add_argument('--width', default=3, type=int, help="Width in pixels for scipy.find_peaks.")
     parser.add_argument('--shift_window', default=0.05, type=float,
                         help="Fraction of columns to use in the alignment of individual orders, 0 to disable.")
     parser.add_argument('--dim', default='1D', type=str,
@@ -80,6 +78,8 @@ if __name__ == "__main__":
                              'Pass only this argument if being used. See "mkidspec_args.txt" for example.')
 
     args = parser.parse_args()
+
+    plot = True if args.plot or args.debug else args.plot
     
     # ==================================================================================================================
     # START LOGGING
@@ -100,27 +100,38 @@ if __name__ == "__main__":
     elif args.msf.lower().endswith('.pkl'):  # the MSF file already exists
         msf_obj = MKIDSpreadFunction(filename=args.msf)
         sim = msf_obj.sim_settings
+    else:
+        raise ValueError('Unknown MSF file type.')
 
     # wavecal
     if args.wavecal.lower().endswith('.h5'):  # the table is not order-sorted and wavecal has yet to be done
         wavecal_table = Photontable(file_name=args.wavecal)
         steps.append('wt_sort')
         steps.append('wavecal')
+        # TODO add clauses that check whether msf/wavecal/extract sim objects are equal
     elif args.wavecal.lower().endswith('.fits'):  # the wavecal has yet to be done
         wavecal_fits = args.wavecal
         steps.append('wavecal')
+        # TODO add clause that checks array size matches with msf sim object
     elif args.wavecal.lower().endswith('.npz'):  # the wavecal file already exists
         wavecal_file = args.wavecal
+    elif not args.wavecal:
+        pass
+    else:
+        raise ValueError('Unknown wavecal file type.')
 
     # extract
-    if args.wavecal:
-        if args.extract.lower().endswith('.h5'):  # the table is not order-sorted or extracted
-            obs_table = Photontable(file_name=args.extract)
-            steps.append('ot_sort')
-            steps.append('extract')
-        elif args.extract.lower().endswith('.fits'):  # the observation is awaiting extraction
-            obs_fits = args.extract
-            steps.append('extract')
+    if args.extract.lower().endswith('.h5'):  # the table is not order-sorted or extracted
+        obs_table = Photontable(file_name=args.extract)
+        steps.append('et_sort')
+        steps.append('extract')
+    elif args.extract.lower().endswith('.fits'):  # the observation is awaiting extraction
+        obs_fits = args.extract
+        steps.append('extract')
+    elif not args.extract:
+        pass
+    else:
+        raise ValueError('Unknown extraction file type.')
 
     logger.info(f'The {steps} step(s) will be conducted.')
 
@@ -140,7 +151,7 @@ if __name__ == "__main__":
                          outdir=args.outdir,
                          bin_range=args.bin_range,
                          missing_order_pix=missing_order_pix,
-                         plot=args.plot,
+                         plot=plot,
                          debug=args.debug)
     if 'wt_sort' in steps:
         # bin the wavecal table
@@ -149,35 +160,43 @@ if __name__ == "__main__":
                                  msf=msf_obj,
                                  resid_map=sim.resid_file,
                                  outdir=args.outdir,
-                                 plot=args.plot)
-    if 'wavecal' in steps:
-        # obtain the wavecal
-        wavecal_file = wavecal(wavecal_fits=wavecal_fits,
-                               orders=args.orders,
-                               elem=args.elem,
-                               minw=sim.minwave,
-                               maxw=sim.maxwave,
-                               residual_max=args.residual_max,
-                               degree=args.degree,
-                               iters=args.iters,
-                               dim=args.dim,
-                               shift_window=args.shift_window,
-                               manual_fit=args.manual_fit,
-                               width=args.width,
-                               outdir=args.outdir,
-                               plot=args.plot)
-    if 'ot_sort' in steps:
+                                 plot=plot)
+    try:
+        if 'wavecal' in steps:
+            # get orders
+            orders = range(sim.order_range[0], sim.order_range[1]+1)[::-1]
+            # obtain the wavecal
+            wavecal_file = wavecal(wavecal_fits=wavecal_fits,
+                                   orders=orders,
+                                   elem=args.elem.lower(),
+                                   minw=sim.minwave,
+                                   maxw=sim.maxwave,
+                                   residual_max=args.residual_max,
+                                   degree=args.degree,
+                                   iters=args.iters,
+                                   dim=args.dim,
+                                   shift_window=args.shift_window,
+                                   manual_fit=args.manual_fit,
+                                   width=args.width,
+                                   outdir=args.outdir,
+                                   plot=plot)
+    except IOError:
+        logger.info('Skipping wavecal.')
+    if 'et_sort' in steps:
         # bin the observation table
         obs_fits = ordersort(table=obs_table,
                              filename='observation',
                              msf=msf_obj,
                              resid_map=sim.resid_file,
                              outdir=args.outdir,
-                             plot=args.plot)
-    if 'extract' in steps:
-        # retrieve the extracted observation spectrum
-        extract(obs_fits=obs_fits,
-                wavecal_file=wavecal_file,
-                plot=args.plot)
+                             plot=plot)
+    try:
+        if 'extract' in steps:
+            # retrieve the extracted observation spectrum
+            extract(obs_fits=obs_fits,
+                    wavecal_file=wavecal_file,
+                    plot=plot)
+    except IOError:
+        logger.info('Skipping extraction.')
 
 logger.info(f'Data reduction complete. Total time: {((time.perf_counter() - tic) / 60):.2f} min. Exiting.')
