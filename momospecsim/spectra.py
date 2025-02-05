@@ -8,7 +8,7 @@ from specutils import Spectrum1D
 from synphot import SpectralElement, SourceSpectrum, units
 from synphot.models import Box1D, BlackBodyNorm1D, ConstFlux1D, Empirical1D
 
-from momospecsim.utils.general import gauss
+from MOMOSpecSim.momospecsim.utils.general import gauss
 
 u.photlam = u.photon / u.s / u.cm ** 2 / u.AA  # new unit name, photon flux per wavelength
 
@@ -19,7 +19,7 @@ def AtmosphericTransmission():
     """
     :return: atmospheric transmission as SpectralElement object
     """
-    x = np.genfromtxt('../mkidspec/simfiles/transmission.dat')
+    x = np.genfromtxt('../momospecsim/simfiles/transmission.dat')
     spec = Spectrum1D(spectral_axis=x[:, 0] * u.nm, flux=x[:, 1] * u.dimensionless_unscaled)
     return SpectralElement.from_spectrum1d(spec)
 
@@ -39,7 +39,7 @@ def FilterTransmission():
     """
     :return: transmission through fridge filter as SpectralElement object
     """
-    file = pd.read_csv('../mkidspec/simfiles/fridge_filter.csv', delimiter=',')
+    file = pd.read_csv('../momospecsim/simfiles/fridge_filter.csv', delimiter=',')
     flux = np.array(file['transmission'])[::-1]*u.dimensionless_unscaled
     flux[flux < 0] = 0
     spec = Spectrum1D(spectral_axis=np.array(file['wavelength'])[::-1]*u.nm, flux=flux)
@@ -86,7 +86,7 @@ def SkyEmission(fov):
     :param fov: field of view at center wavelength in arcsec2
     :return: night sky emission
     """
-    file = np.genfromtxt('../mkidspec/simfiles/sky_emission/radiance.dat')
+    file = np.genfromtxt('../momospecsim/simfiles/sky_emission/radiance.dat')
     spec = Spectrum1D(spectral_axis=file[:, 0]*u.nm, flux=file[:, 1]*(fov/2)**2*u.ph/u.s/u.m**2/u.um)
     return SourceSpectrum.from_spectrum1d(spec)
 

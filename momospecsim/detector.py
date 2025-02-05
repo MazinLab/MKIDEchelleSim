@@ -5,9 +5,9 @@ from scipy.constants import c
 from astropy.constants import h, c
 from mkidpipeline.photontable import Photontable
 
-from momospecsim.utils.general import wave_to_energy
-from filterphot import mask_deadtime
-from momospecsim.engine import draw_photons
+from MOMOSpecSim.momospecsim.utils.general import wave_to_energy
+from MOMOSpecSim.filterphot import mask_deadtime
+from MOMOSpecSim.momospecsim.engine import draw_photons
 
 logger = logging.getLogger('detector')
 
