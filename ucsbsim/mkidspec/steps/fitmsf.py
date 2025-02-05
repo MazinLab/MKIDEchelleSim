@@ -292,7 +292,7 @@ def fitmsf(msf_table: Photontable,
     :param bool debug: True to plot all plots regardless
     :return: MSF object
     """
-    
+    logger.info('Starting the MSF order-fitting step.')
     # extract resid map from file if needed:
     resid_map = np.loadtxt(fname=resid_map, delimiter=',') if isinstance(resid_map, str) else resid_map
 
@@ -344,6 +344,7 @@ def fitmsf(msf_table: Photontable,
         mo.append(len(m[1]))
     mo = max(mo)
 
+    logger.info('Fitting pixel by pixel.')
     for p in tqdm.tqdm(pixels):  # do the non-linear least squares fit for each pixel
         leg_s = Legendre(coef=(0, 0, 0), domain=[pix_E[0, p] / pix_E[-1, p], 1])  # setup the special sigma Legendre
 
@@ -369,7 +370,7 @@ def fitmsf(msf_table: Photontable,
             amp_init = bin_counts[[gen.nearest_idx(bin_centers, phi) for phi in phi_init], p]
                 
             # populate Parameters object with initial guesses:
-            param = init_params(phi_guess=phi_init, e_guess=pix_E[:, p], s_guess=[sig_init]*5, a_guess=amp_init)
+            param = init_params(phi_guess=phi_init, e_guess=pix_E[:, p], s_guess=[sig_init]*nord, a_guess=amp_init)
             n_params.append(param)
 
             # get the initial guess fitting metric:
@@ -388,7 +389,7 @@ def fitmsf(msf_table: Photontable,
                                     leg_s))  # sigma legendre poly object
 
         if not opt_params.success:  # if unsuccessful, try fitting again with constraints
-            c_params = init_params(phi_guess=phi_init, e_guess=pix_E[:, p], s_guess=sig_init, a_guess=amp_init,
+            c_params = init_params(phi_guess=phi_init, e_guess=pix_E[:, p], s_guess=[sig_init]*nord, a_guess=amp_init,
                                    w_constr=True)
             c_opt_params = minimize(fcn=fit_func,
                                     params=c_params,  # params
