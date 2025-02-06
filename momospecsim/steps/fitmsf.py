@@ -20,10 +20,10 @@ from lmfit import Parameters, minimize
 from mkidpipeline.photontable import Photontable
 
 # local imports
-import momospecsim.engine as engine
-from momospecsim.msf import MKIDSpreadFunction
-from momospecsim.detector import wave_to_phase, phase_to_wave, sorted_table
-import momospecsim.utils.general as gen
+import MOMOSpecSim.momospecsim.engine as engine
+from MOMOSpecSim.momospecsim.msf import MKIDSpreadFunction
+from MOMOSpecSim.momospecsim.detector import wave_to_phase, phase_to_wave, sorted_table
+import MOMOSpecSim.momospecsim.utils.general as gen
 
 """
 Obtain the MKID Spread Function (MSF) from a calibration (flat-field or known-temperature blackbody) spectrum.
