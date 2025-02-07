@@ -545,7 +545,7 @@ class SpectrographSetup:
 
 
 # misc. debugging variables below
-GRATING_CATALOG = np.loadtxt('/home/kimc/pycharm/KIDSpecSim/benchdesign/newport_masters.txt', delimiter=',',
+GRATING_CATALOG = np.loadtxt('../benchdesign/newport_masters.txt', delimiter=',',
                              dtype=[('name', 'U10'), ('l', 'f4'), ('blaze', 'f4'),
                                     ('width', 'f4'), ('height', 'f4'), ('stock', 'U10')])
 GRATING_CATALOG['l'] = 1e6/GRATING_CATALOG['l']
