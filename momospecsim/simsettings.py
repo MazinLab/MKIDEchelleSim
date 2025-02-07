@@ -5,9 +5,9 @@ import astropy.units as u
 from astropy.constants import R_sun
 
 # local imports
-from MOMOSpecSim.momospecsim.spectrograph import GratingSetup, SpectrographSetup
-from MOMOSpecSim.momospecsim.detector import MKIDDetector
-import MOMOSpecSim.momospecsim.engine as engine
+from momospecsim.spectrograph import GratingSetup, SpectrographSetup
+from momospecsim.detector import MKIDDetector
+import momospecsim.engine as engine
 
 class SpecSimSettings:
     def __init__(

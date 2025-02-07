@@ -18,13 +18,13 @@ from mkidpipeline.photontable import Photontable
 from mkidpipeline.steps.buildhdf import buildfromarray  # TODO: probably defaults to MEC headers
 
 # local imports
-from MOMOSpecSim.momospecsim.spectra import get_spec, apply_bandpass, AtmosphericTransmission, FilterTransmission, \
+from momospecsim.spectra import get_spec, apply_bandpass, AtmosphericTransmission, FilterTransmission, \
     TelescopeTransmission, FineGrid, clip_spectrum
-from MOMOSpecSim.momospecsim.spectrograph import GratingSetup, SpectrographSetup
-from MOMOSpecSim.momospecsim.detector import MKIDDetector, wave_to_phase
-import MOMOSpecSim.momospecsim.engine as engine
-from MOMOSpecSim.momospecsim.simsettings import SpecSimSettings
-from MOMOSpecSim.momospecsim.utils.general import LoadFromFile
+from momospecsim.spectrograph import GratingSetup, SpectrographSetup
+from momospecsim.detector import MKIDDetector, wave_to_phase
+import momospecsim.engine as engine
+from momospecsim.simsettings import SpecSimSettings
+from momospecsim.utils.general import LoadFromFile
 
 """
 Simulation of an MKID spectrometer observation.
@@ -225,7 +225,6 @@ if __name__ == '__main__':
         plt.title("Input Spectrum")
         plt.xlabel('Wavelength (nm)')
         plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
-        plt.xlim([sim.minwave.value, sim.maxwave.value])
         plt.tight_layout()
         plt.show()
     
@@ -244,7 +243,6 @@ if __name__ == '__main__':
         plt.title("Spectrum after Selected Bandpasses")
         plt.xlabel('Wavelength (nm)')
         plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
-        plt.xlim([sim.minwave.value, sim.maxwave.value])
         plt.tight_layout()
         plt.show()
 
@@ -259,7 +257,7 @@ if __name__ == '__main__':
         plt.grid()
         for x, y, o in zip(masked_waves, masked_blaze, spectro.orders):
             plt.plot(x, y, label=f'Order {o}')
-        plt.title("Spectrum after Bandpasses & Blazing")
+        plt.title("Spectrum after Blazing")
         plt.xlabel('Wavelength (nm)')
         plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
         plt.tight_layout()

@@ -8,7 +8,7 @@ from specutils import Spectrum1D
 from synphot import SpectralElement, SourceSpectrum, units
 from synphot.models import Box1D, BlackBodyNorm1D, ConstFlux1D, Empirical1D
 
-from MOMOSpecSim.momospecsim.utils.general import gauss
+from momospecsim.utils.general import gauss
 
 u.photlam = u.photon / u.s / u.cm ** 2 / u.AA  # new unit name, photon flux per wavelength
 
