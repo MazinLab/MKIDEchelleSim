@@ -8,7 +8,6 @@ import astropy.units as u
 import matplotlib.pyplot as plt
 import logging
 
-
 u.photlam = u.photon / u.s / u.cm ** 2 / u.AA  # photon flux per wavelength
 SIG2FWHM = 2 * np.sqrt(np.log(2))
 
@@ -40,7 +39,7 @@ def _determine_apodization(x, pixel_samples_frac, pixel_max_npoints):
     0     1     2  pixedge_a  2.5  3     4
     """
     # each pixel split into npoints that are within the boundaries
-    in_pixel = np.abs(x[:, None, None]) <= (pixel_samples_frac / 2 + 0.5) 
+    in_pixel = np.abs(x[:, None, None]) <= (pixel_samples_frac / 2 + 0.5)
 
     edge = pixel_samples_frac / 2
     last = edge.astype(int)  # farthest left and right points in any given pixel
@@ -90,10 +89,10 @@ def draw_photons(convol_wave,
     result_p = convol_result.reshape(cdf_shape)
     wave_p = convol_wave.reshape(cdf_shape)
     sort_idx = np.argsort(wave_p, axis=0)
-    result_pix = np.take_along_axis(result_p, sort_idx, axis=0) # sorting by wavelength for proper CDF shape
+    result_pix = np.take_along_axis(result_p, sort_idx, axis=0)  # sorting by wavelength for proper CDF shape
     wave_pix = np.take_along_axis(wave_p, sort_idx, axis=0)
     wave_unit = u.eV if energy else u.nm
-    wave_pix = wave_pix.to(wave_unit).value 
+    wave_pix = wave_pix.to(wave_unit).value
 
     cdf = np.cumsum(result_pix, axis=0)
     rest_of_way_to_photons = area * exptime
@@ -124,7 +123,7 @@ def draw_photons(convol_wave,
         np.random.seed(randomseed)
         l_photons.append(cdf_interp(np.random.uniform(0, 1, size=n)) * wave_unit)
 
-        np.random.seed(randomseed*2)  # prevent potential correlation of wavelength with arrival time
+        np.random.seed(randomseed * 2)  # prevent potential correlation of wavelength with arrival time
         t_photons.append(np.random.uniform(0, 1, size=n) * exptime)
 
     logger.info("Completed photon draw, obtained random arrival times and wavelengths for individual photons.")
@@ -134,10 +133,9 @@ def draw_photons(convol_wave,
 class Engine:
     def __init__(self, spectrograph):
         """
-        :param spectrograph: SpectrographSetup object
+        :param spectrograph: Spectrograph object
         """
         self.spectrograph = spectrograph
-
 
     def blaze(self, wave, spectra):
         """
@@ -152,7 +150,6 @@ class Engine:
         masked_waves = [wave[order_mask[i]].to(u.nm) for i in range(len(self.spectrograph.orders))]
         logger.info('Multiplied spectrum with blaze efficiencies.')
         return blazed_spectrum, masked_waves, masked_blaze
-
 
     def optically_broaden(self, wave, flux: u.Quantity, axis: int = 1):
         """
@@ -181,8 +178,7 @@ class Engine:
         Treat it as constant and define at the middle of the wavelength range.
         """
         sample_width = wave.mean() * self.spectrograph.nondimensional_lsf_width / np.diff(wave).mean()
-        return ndi.gaussian_filter1d(flux, sample_width/(2*np.sqrt(2*np.log(2))), axis=axis) * flux.unit
-
+        return ndi.gaussian_filter1d(flux, sample_width / (2 * np.sqrt(2 * np.log(2))), axis=axis) * flux.unit
 
     def build_mkid_kernel(self, n_sigma: float, sampling, energy=False):
         """
@@ -196,10 +192,9 @@ class Engine:
         mkid_kernel_npoints = np.ceil((max_mkid_kernel_width / sampling).si.value).astype(int)  # points in Gaussian
         if not mkid_kernel_npoints % 2:  # ensuring it is odd so 1 point is at kernel center
             mkid_kernel_npoints += 1
-        return gaussian(mkid_kernel_npoints, 
+        return gaussian(mkid_kernel_npoints,
                         (self.spectrograph.dl_mkid_max(energy=energy) / sampling).si.value / SIG2FWHM)
         # takes standev not FWHM, width/sampling is the dimensionless standev
-
 
     def mkid_kernel_waves(self, n_points, n_sig=3, oversampling=10, energy=False):
         """
@@ -219,7 +214,6 @@ class Engine:
                                       n_sig * (pixel_rescale[i, j] * dl_mkid_max / sampling).to(unit).value / SIG2FWHM,
                                       n_points) for j in range(npix)] for i in range(nord)])
 
-
     def convolve_mkid_response(self,
                                wave,
                                spectral_fluxden,
@@ -237,8 +231,9 @@ class Engine:
         :return: convolution products of the spectrum with the MKID response
         """
         if energy:
-            spectral_fluxden = (spectral_fluxden * wave / wave.to(u.eV, 
-                                                              equivalencies=u.spectral())).to(u.photon/u.cm**2/u.s/u.eV)
+            spectral_fluxden = (spectral_fluxden * wave / wave.to(u.eV,
+                                                                  equivalencies=u.spectral())).to(
+                u.photon / u.cm ** 2 / u.s / u.eV)
             wave = wave.to(u.eV, equivalencies=u.spectral())  # converting wavelength to energy
 
         # obtain relevant quantities
@@ -255,7 +250,7 @@ class Engine:
             pixel_samples_frac = self.spectrograph.pixel_samples_frac(oversampling, energy=energy)
             x = np.linspace(-pixel_max_npoints // 2, pixel_max_npoints // 2, num=pixel_max_npoints)
             interp_wave = (x[:, None, None] / pixel_samples_frac) * dl_pixel + lambda_pixel
-            
+
             # apodization determines the amount of partial flux to use from a bin that is partially outside given pixel
             interp_apod = _determine_apodization(x, pixel_samples_frac, pixel_max_npoints)  # [dimensionless]
             data = np.zeros(interp_apod.shape)
@@ -274,8 +269,8 @@ class Engine:
             data *= interp_apod  # flux which is not part of a given pixel is removed
 
         # Do the convolution, returns a peak-norm Gaussian divided into sections as wide as sampling dl_pix_min/10
-        mkid_kernel = self.build_mkid_kernel(n_sigma_mkid, 
-                                             self.spectrograph.sampling(oversampling, energy=energy), 
+        mkid_kernel = self.build_mkid_kernel(n_sigma_mkid,
+                                             self.spectrograph.sampling(oversampling, energy=energy),
                                              energy=energy)
 
         if simp:
@@ -307,7 +302,6 @@ class Engine:
         result = result.to(u.ph / u.cm ** 2 / u.s) / norms[None, ...] * dx[None, ...].value
 
         return result_wave, result, mkid_kernel
-
 
     def lambda_to_pixel_space(self, array_wave, array, leftedge):
         """

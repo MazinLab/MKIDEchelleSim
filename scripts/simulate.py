@@ -14,13 +14,15 @@ import logging
 import argparse
 from specutils import Spectrum1D
 from synphot import SpectralElement
+
+from MOMOSpecSim.momospecsim.spectra import Throughput
+from MOMOSpecSim.scratch.spectrum import incident_angle
 from mkidpipeline.photontable import Photontable
 from mkidpipeline.steps.buildhdf import buildfromarray  # TODO: probably defaults to MEC headers
 
 # local imports
-from momospecsim.spectra import get_spec, apply_bandpass, AtmosphericTransmission, FilterTransmission, \
-    TelescopeTransmission, FineGrid, clip_spectrum
-from momospecsim.spectrograph import GratingSetup, SpectrographSetup
+from momospecsim.spectra import Target, apply_bandpass, AtmosphericTransmission, FridgeTransmission, clip_spectrum
+from momospecsim.optics import Telescope, Fiber, Grating, Spectrograph
 from momospecsim.detector import MKIDDetector, wave_to_phase
 import momospecsim.engine as engine
 from momospecsim.simsettings import SpecSimSettings
@@ -40,7 +42,6 @@ The steps are:
     -The photon table is saved to an h5 file.
 """
 
-
 if __name__ == '__main__':
     tic = time.perf_counter()  # recording start time for script
 
@@ -49,15 +50,26 @@ if __name__ == '__main__':
     # ==================================================================================================================
     parser = argparse.ArgumentParser(description='MKID Spectrometer Simulation')
 
-    # optional simulation args:
-    parser.add_argument('--type_spectrum', default='flat', type=str,
-                        help='The type of spectrum can be: "blackbody", "phoenix", "flat", "emission", '
-                             '"sky_emission", or "from_file".')
+    # general simulation args:
     parser.add_argument('--outdir', default='outdir', type=str, help='Directory for output files.')
-    parser.add_argument('-rs', '--randomseed', default=10, type=int,
-                        help='Random seed for reproducibility.')
-    parser.add_argument('--resid_file', default='outdir/resids.csv', type=str,
-                        help="Filename of the resonator IDs, will be created if it doesn't exist.")
+    parser.add_argument('--plot', action='store_true', default=False, help='If passed, shows final plots.')
+    parser.add_argument('--debug', default=False, action='store_true',
+                        help='If passed, shows additional debugging plots, overrides "--plot".')
+    parser.add_argument('--simpconvol', action='store_true', default=False,
+                        help='If passed, indicates that a faster, simplified MKID convolution should be conducted.')
+    parser.add_argument('--wave_convol', action='store_true', default=False,
+                        help='If passed, indicates that the MKID convolution is w.r.t wavelength instead of energy.')
+
+    # observation object args:
+    parser.add_argument('--spectype', default='flat', type=str,
+                        help='The type of spectrum can be: "blackbody", "phoenix", "flat", "emission", '
+                             '"sky_emission", or "from_file". "sky_emission" overrides "on_sky", will be True.')
+    parser.add_argument('--on_sky', action='store_true', default=False,
+                        help='If passed, the observation is conducted "on-sky" instead of in the laboratory and'
+                             'indicates the spectrum will be atmospherically/telescopically attenuated, take an '
+                             'additional throughput hit from the long fiber coupling, tip/tilt, and seeing, and have'
+                             'night sky emission lines added in.')
+    parser.add_argument('-et', '--exptime', default=250, type=float, help='The exposure time [sec].')
     parser.add_argument('-sf', '--spec_file', default=None,
                         help='Directory/filename of spectrum, REQUIRED if spectrum is "emission" or "from_file".')
     parser.add_argument('-dist', type=float, default=5,  # Sirius A, brightest star in the night sky
@@ -66,24 +78,39 @@ if __name__ == '__main__':
                         help='Radius of target star [# of R_sun], used if spectrum is "blackbody"/"phoenix".')
     parser.add_argument('-T', default=4000, type=float,
                         help='Temperature of target in K, used if spectrum is "blackbody"/"phoenix".')
-    parser.add_argument('-et', '--exptime', default=250, type=float, help='The exposure time [sec].')
-    parser.add_argument('--telearea', default=np.pi * 4 ** 2, type=float, help='The telescope area [cm2].')
-    parser.add_argument('--fov', default=1, type=float, help='Field of view [arcsec2].')
-    parser.add_argument('--simpconvol', action='store_true', default=False,
-                        help='If passed, indicates that a faster, simplified convolution should be conducted.')
-    parser.add_argument('--wave_convol', action='store_true', default=False,
-                        help='If passed, indicates that the MKID convolution is w.r.t wavelength instead of energy.')
-    parser.add_argument('--on_sky', action='store_true', default=False,
-                        help='If passed, the observation is conducted "on-sky" instead of in the laboratory and'
-                             'indicates the spectrum will be atmospherically/telescopically attenuated and have'
-                             'night sky emission lines added in.')
-    parser.add_argument('--reflect', default=0.9, type=float,
-                        help='Factor to attenuate spectrum due to telescope reflectivity, between 0 and 1, '
-                             'used if "on_sky" is True.')
+    parser.add_argument('--objsize', default=5, type=float, help='Angular size of object [mas].')
+    parser.add_argument('--seeing', default=1, type=float, help='Seeing disk diameter [arcsec].')
+
+    # not required telescope/fiber args:
+    parser.add_argument('--telename', default=None, type=str,
+                        help='Telescope or system filename for throughput calculation, used if "on_sky" is True.')
+    parser.add_argument('-aperture', default=None, type=float, help='Telescope aperture [mm].')
+    parser.add_argument('--telefocal', default=None, type=float, help='Telescope focal length [mm].')
+    parser.add_argument('-tfn','--telefibername', default=None, type=str,
+                        help='On-sky fiber filename for throughput calculation.')
+    parser.add_argument('-tfl', '--telefiberlength', default=None, type=float, 
+                        help='On-sky fiber length [cm].')
+    parser.add_argument('-tfNA', '--telefiberNA', default=None, type=float, 
+                        help='On-sky fiber num. aperture.')
+    parser.add_argument('-tfc', '--telefibercore', default=None, type=float, 
+                        help='On-sky fiber core size [um].')
+    parser.add_argument('-tfa', --'telefiberangle', default=None, type=float, 
+                        help='On-sky fiber incident angle of incoming light [arcsec].')
+    # required fiber args:
+    parser.add_argument('--objfiber_dist', default=5, type=float, 
+                        help='Distance between object (or telefiber) and fiber array [mm].')
+    parser.add_argument('-fan', '--fiberarrayname', default='FG025LJA 0.10 NA', type=str,
+                        help='Fiber array filename for throughput calculation.')
+    parser.add_argument('-fal', '--fiberarraylength', default=25, type=float, 
+                        help='Fiber array length [cm].')
+    parser.add_argument('-faNA', '--fiberarrayNA', default=0.1, type=float, 
+                        help='Fiber array num. aperture.')
+    parser.add_argument('-fac','--fiberarraycore', default=25, type=float, 
+                        help='Fiber array core size [um].')
+    
+    # spectrograph/detector args:
     parser.add_argument('--minw', default=330, type=float, help='The min operating wavelength [nm].')
     parser.add_argument('--maxw', default=850, type=float, help='The max operating wavelength [nm].')
-
-    # optional spectrograph args:
     parser.add_argument('--npix', default=2048, type=int, help='The linear # of pixels in the array.')
     parser.add_argument('--pixsize', default=20, type=float,
                         help='The width of the MKID pixel in the dispersion direction [um].')
@@ -99,53 +126,25 @@ if __name__ == '__main__':
                         help="Diffraction angle at the central pixel [deg]. Pass 'littrow' to be equal to 'alpha'.")
     parser.add_argument('--delta', default=63, type=float, help='Blaze angle [deg].')
     parser.add_argument('-d', '--groove_length', default=3164.56, type=float,
-                        help='The groove length of the grating [nm].')   # 316 lines per mm
+                        help='The groove length of the grating [nm].')  # 316 lines per mm
     parser.add_argument('--m0', default=4, type=int, help='The initial order.')
     parser.add_argument('--m_max', default=7, type=int, help='The final order.')
     parser.add_argument('-ppre', '--pixels_per_res_elem', default=2.5, type=float,
                         help='Number of pixels per spectrograph resolution element.')
-    parser.add_argument('--focal_length', default=300, type=float,
-                        help='The focal length of the detector [mm].')
-    parser.add_argument('--plot', action='store_true', default=False, help='If passed, shows final plots.')
-    parser.add_argument('--debug', default=False, action='store_true',
-                        help='If passed, shows additional debugging plots, overrides "--plot".')
+    parser.add_argument('--focal_length', default=300, type=float, help='Focal length of detector [mm].')
+    parser.add_argument('-rs', '--randomseed', default=10, type=int,
+                        help='Random seed for detector reproducibility.')
+    parser.add_argument('--resid_file', default='outdir/resids.csv', type=str,
+                        help="Filename of the resonator IDs, will be created if it doesn't exist.")
 
-    # get optional args by importing from arguments file:
+    # get args by importing from arguments file instead:
     parser.add_argument('--args_file', default=None, type=open, action=LoadFromFile,
                         help='.txt file with arguments written exactly as they would be in the command line.'
                              'Pass only this argument if being used. See "simulate_args.txt" for example.')
 
-    # get arguments & simulation settings
+    # get arguments:
     args = parser.parse_args()
-    sim = SpecSimSettings(
-        minwave_nm=args.minw,
-        maxwave_nm=args.maxw,
-        npix=args.npix,
-        pixelsize_um=args.pixsize,
-        designR0=args.R0,
-        l0_nm=args.l0,
-        alpha_deg=args.alpha,
-        delta_deg=args.delta,
-        beta_deg=args.beta,
-        groove_length_nm=args.groove_length,
-        m0=args.m0,
-        m_max=args.m_max,
-        pixels_per_res_elem=args.pixels_per_res_elem,
-        focal_length_mm=args.focal_length,
-        resid_file=args.resid_file,
-        type_spectrum=args.type_spectrum,
-        spec_file=args.spec_file,
-        exptime_s=args.exptime,
-        telearea_cm2=args.telearea,
-        fov=args.fov,
-        distance_ps=args.dist,
-        radius_Rsun=args.rad,
-        temp_K=args.T,
-        on_sky=args.on_sky,
-        simpconvol=args.simpconvol,
-        randomseed=args.randomseed
-    )
-    
+
     E_convol = False if args.wave_convol else True  # changes simulation to convolve with either energy or wavelength
     plot = True if args.plot or args.debug else args.plot
 
@@ -153,60 +152,94 @@ if __name__ == '__main__':
     # CHECK FOR OR CREATE DIRECTORIES
     # ==================================================================================================================
     now = dt.now()
-    try:
-        os.makedirs(name=args.outdir, exist_ok=True)
-    except FileNotFoundError:
-        pass
-    try:
-        os.makedirs(name=os.path.dirname(sim.resid_file), exist_ok=True)
-    except FileNotFoundError:
-        pass
+    for d in [args.outdir, os.path.dirname(args.resid_file)]:
+        try:
+            os.makedirs(name=d, exist_ok=True)
+        except FileNotFoundError:
+            pass
 
     # ==================================================================================================================
     # START LOGGING TO FILE
     # ==================================================================================================================
     logger = logging.getLogger('simulate')
     logging.basicConfig(level=logging.INFO)
-    logger.info(msg=f"An MKID spectrometer observation of a(n) {sim.type_spectrum} spectrum is being simulated."
-                     f"\nThe date and time are: {now.strftime('%Y-%m-%d %H:%M:%S')}.")
+    logger.info(msg=f"An MKID spectrometer observation of a(n) {args.spectype} spectrum is being simulated."
+                    f"\nThe date and time are: {now.strftime('%Y-%m-%d %H:%M:%S')}.")
 
     # ==================================================================================================================
-    # INSTANTIATE SPECTROGRAPH & DETECTOR
+    # GENERATE/IMPORT RANDOM SEED OBJECTS
     # ==================================================================================================================
-    logger.info(f'The random seed is set to {sim.randomseed}.')
+    logger.info(f'The random seed is set to {args.randomseed}.')  # TODO move randomseed to detector
 
-    np.random.seed(sim.randomseed)
-    R0s = np.random.uniform(low=.85, high=1.15, size=sim.npix) * sim.designR0
-    logger.info(msg=f'The pixel Rs @ {sim.l0} were randomly generated about {sim.designR0}.')
+    np.random.seed(args.randomseed)
+    R0s = np.random.uniform(low=.85, high=1.15, size=args.npix) * args.designR0  # TODO make into detector func
+    logger.info(msg=f'The pixel Rs @ {args.l0} were randomly generated about {args.R0}.')
 
-    np.random.seed(sim.randomseed)
-    phase_offsets = np.random.uniform(low=.8, high=1.2, size=sim.npix)
+    np.random.seed(args.randomseed)
+    phase_offsets = np.random.uniform(low=.8, high=1.2, size=args.npix)  # TODO make into detector func
     logger.info(msg=f'The pixel phase offsets were randomly generated.')
 
     try:  # check for the resonator IDs, create if not exist
-        resid_map = np.loadtxt(fname=sim.resid_file, delimiter=',')
-        logger.info(msg=f'The resonator IDs were imported from {sim.resid_file}.')
+        resid_map = np.loadtxt(fname=args.resid_file, delimiter=',')  # TODO make into detector func
+        logger.info(msg=f'The resonator IDs were imported from {args.resid_file}.')
     except IOError:
-        np.random.seed(sim.randomseed)
-        resid_map = np.arange(sim.npix, dtype=int) * 10 + 100
-        np.savetxt(fname=sim.resid_file, X=resid_map, delimiter=',')
+        np.random.seed(args.randomseed)
+        resid_map = np.arange(args.npix, dtype=int) * 10 + 100
+        np.savetxt(fname=args.resid_file, X=resid_map, delimiter=',')
         logger.info(msg=f'The resonator IDs were generated from {resid_map.min()} to {resid_map.max()}.')
 
-    detector = MKIDDetector(n_pix=sim.npix, 
-                            pixel_size=sim.pixelsize, 
-                            design_R0=sim.designR0, 
-                            l0=sim.l0, 
+    # ==================================================================================================================
+    # INSTANTIATE ALL CLASSES
+    # ==================================================================================================================
+    target = Target(spectype=args.spectype, 
+                    dist=args.dist, 
+                    rad=args.rad, 
+                    temp=args.T, 
+                    spec_file=args.spec_file,
+                    minwave=args.minw,
+                    maxwave=args.maxw,
+                    objsize=args.objsize,
+                    seeing=args.seeing,
+                    on_sky=args.on_sky,)
+    telescope = Telescope(aperture=args.aperture, focal_length=args.telefocal, filename=args.telename)
+    telefiber = Fiber(filename=args.telefibername, 
+                      num_aperture=args.telefiberNA, 
+                      length=args.telefiberlength,
+                      core_size=args.telefibercore,
+                      incident_angle=args.telefiberangle)
+    fiberarray = Fiber(filename=args.fiberarrayname,
+                       num_aperture=args.fiberarrayNA,
+                       length=args.fiberarraylength,
+                       core_size=args.fiberarraycore)
+    detector = MKIDDetector(n_pix=args.npix,
+                            pixel_size=args.pixelsize,
+                            design_R0=args.R0,
+                            l0=args.l0,
                             R0s=R0s,
-                            phase_offsets=phase_offsets, 
+                            phase_offsets=phase_offsets,
                             resid_map=resid_map)
-    spectro = SpectrographSetup(order_range=sim.order_range, 
-                                final_wave=sim.l0,
+    grating = Grating(alpha=args.alpha, delta=args.delta, beta_center=args.beta, groove_length=args.groove_length)
+    spectro = Spectrograph(order_range=sim.order_range,
+                                final_wave=args.l0,
                                 pixels_per_res_elem=sim.pixels_per_res_elem,
-                                focal_length=sim.focal_length, 
-                                grating=sim.grating, 
+                                focal_length=args.focal_length,
+                                grating=grating,
                                 detector=detector)
     eng = engine.Engine(spectrograph=spectro)
 
+    # gather simulation objects and settings:
+    sim = SpecSimSettings(
+        outdir=args.outdir,
+        simpconvol=args.simpconvol,
+        waveconvol=args.waveconvol,
+        target=target,
+        telescope=telescope,
+        telefiber=telefiber,
+        fiberarray=fiberarray,
+        spectrograph=spectro,
+        detector=detector
+    )
+    
     # shorten commonly used properties:
     nord = spectro.nord  # number of orders
     lambda_pixel = spectro.pixel_wavelengths().to(u.nm)  # expected wavelength at pixel center
@@ -214,63 +247,50 @@ if __name__ == '__main__':
     # ==================================================================================================================
     # SIMULATION STARTS
     # ==================================================================================================================
-    # obtain spectrum:
-    spectrum = get_spec(spectrum_type=sim.type_spectrum, distance=sim.distance, radius=sim.radius, teff=sim.temp,
-                        spec_file=sim.spec_file, minwave=sim.minwave, maxwave=sim.maxwave, on_sky=sim.on_sky,
-                        fov=sim.fov)  # though all args are passed, type_spectrum determines which will be used
+    # initialize spectrum:
+    target.spectrum = target.init_spectrum(aperture=telescope.aperture)
+    target.size = target.init_size(aperture=telescope.aperture, fiber_angle=telefiber.accept_angle)
+    if plot:
+        target.plot(title='Initial Spectrum')
+
+    # multiply by atmosphere and telescope throughput (if any):
+    target.spectrum *= (Throughput('../momospecsim/simfiles/atmosphere/transmission.dat') * telescope.thruput)
     
-    if plot:
-        plt.grid()
-        plt.plot(spectrum.waveset.to(u.nm), spectrum(spectrum.waveset))
-        plt.title("Input Spectrum")
-        plt.xlabel('Wavelength (nm)')
-        plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
-        plt.tight_layout()
-        plt.show()
+    # attenuate spectrum and size via telescope fiber (if any):
+    telefiber.attenuate(target=target, aperture=telescope.aperture, fnum=telescope.fnum)
     
-    # populate bandpasses:
-    bandpasses = [FineGrid(min=sim.minwave, max=sim.maxwave), FilterTransmission()]  # interpolating/filtering
-    if sim.on_sky:
-        bandpasses.append(AtmosphericTransmission())  # attenuation due to atmosphere
-        bandpasses.append(TelescopeTransmission(reflectivity=args.reflect))  # attenuation due to telescope reflection
-
-    # apply bandpasses:
-    bandpass_spectrum = apply_bandpass(spectra=spectrum, bandpass=bandpasses)
-
+    # have light diverge (either from telefiber or object):
+    target.diverge(fiber=fiberarray, distance=args.objfiber_dist)
+    
+    # attenuate spectrum via fiber array:
+    fiberarray.attenuate(target=target)  # TODO figure out if this works fiber to fiber and obj to fiber
     if plot:
-        plt.grid()
-        plt.plot(bandpass_spectrum.waveset.to(u.nm), bandpass_spectrum(bandpass_spectrum.waveset))
-        plt.title("Spectrum after Selected Bandpasses")
-        plt.xlabel('Wavelength (nm)')
-        plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
-        plt.tight_layout()
-        plt.show()
+        target.plot(title='Telescope/Fiber/Atmo-Attenuated Spectrum')
 
-    # clip spectrum to useable range:
-    clipped_spectrum = clip_spectrum(x=bandpass_spectrum, clip_range=(sim.minwave, sim.maxwave))
-
-    # blaze spectrum:
-    blazed_spectrum, masked_waves, masked_blaze = eng.blaze(wave=clipped_spectrum.waveset,
-                                                            spectra=clipped_spectrum(clipped_spectrum.waveset))
-
+    # attenuate through spectrograph collimating lens:
+    target.spectrum *= Throughput('TODO collimating lens filename')
+    
+    # blaze, attenuate, and broaden via grating:
+    target.clip_spectrum()  # clipping to useful range, arbitrarily discarding near-zero regions
+    target.spectrum *= spectro.blaze(target.spectrum.waveset)
+    target.spectrum, *mask = eng.blaze(wave=target.spectrum.waveset,
+                                                            spectra=target.spectrum(target.spectrum.waveset))
     if plot:
-        plt.grid()
-        for x, y, o in zip(masked_waves, masked_blaze, spectro.orders):
-            plt.plot(x, y, label=f'Order {o}')
-        plt.title("Spectrum after Blazing")
-        plt.xlabel('Wavelength (nm)')
-        plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
-        plt.tight_layout()
-        plt.show()
+        target.blaze_plot(title='Blazed Spectrum', mask=mask)
+    
+    # attenuate through spectrograph focusing lens, fridge filters, and detector fill-factor:
+
 
     # optically-broaden spectrum (convolution with line spread function):
     broadened_spectrum = eng.optically_broaden(wave=clipped_spectrum.waveset, flux=blazed_spectrum)
 
+
+    # TODO normal script from here on
     # convolve with MKID resolution widths:
     convol_wave, convol_result, mkid_kernel = eng.convolve_mkid_response(wave=clipped_spectrum.waveset,
                                                                          spectral_fluxden=broadened_spectrum,
                                                                          oversampling=args.osamp,
-                                                                         n_sigma_mkid=args.nsig, 
+                                                                         n_sigma_mkid=args.nsig,
                                                                          simp=sim.simpconvol,
                                                                          energy=E_convol)
 
@@ -279,8 +299,8 @@ if __name__ == '__main__':
                                                         minwave=sim.minwave, maxwave=sim.maxwave, energy=E_convol,
                                                         randomseed=sim.randomseed, exptime=sim.exptime,
                                                         area=sim.telearea)
-    
-    if plot: # phase/pixel heat map to verify that phases are within proper values and orders are visible
+
+    if plot:  # phase/pixel heat map to verify that phases are within proper values and orders are visible
         # separate photons by resid (pixel) and realign (no offset):
         idx = [np.where(photons[:observed].resID == resid_map[j]) for j in range(sim.npix)]
         photons_realign = [(photons[:observed].wavelength[idx[j]] / phase_offsets[j]).tolist() for j in range(sim.npix)]
@@ -300,9 +320,9 @@ if __name__ == '__main__':
         plt.ylabel(r"Phase ($\times \pi /2$)")
         plt.tight_layout()
         plt.show()
-    
+
     # saving final photon list to h5 file, store linear phase conversion in header:
-    h5_file = f'{args.outdir}/{sim.type_spectrum}.h5'
+    h5_file = f'{args.outdir}/{sim.spectype}.h5'
     buildfromarray(array=photons[:observed], user_h5file=h5_file)
     pt = Photontable(file_name=h5_file, mode='write')
     pt.update_header(key='sim_settings', value=sim)
@@ -341,10 +361,10 @@ if __name__ == '__main__':
         blazed_int_spec = np.array([eng.lambda_to_pixel_space(array_wave=clipped_spectrum.waveset,
                                                               array=blazed_spectrum[i],
                                                               leftedge=lambda_left[i]) for i in range(nord)])
-        
+
         # plotting comparison between flux-integrated spectrum, integrated/convolved spectrum, & final counts FSR-binned
         plt.grid()
-        for n in range(nord-1):
+        for n in range(nord - 1):
             plt.plot(lambda_pixel[n], photons_binned[::-1][n], color='k', linewidth=1, linestyle='--')
             plt.plot(lambda_pixel[n], convol_sum[n], color='red', linewidth=1.5, alpha=0.5)
             plt.plot(lambda_pixel[n], blazed_int_spec[n], color='b')

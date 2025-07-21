@@ -49,9 +49,9 @@ if __name__ == '__main__':
     m0, m_max = 7, 14
     grating = GratingSetup(0, (34.38 * u.deg).to(u.rad).value, 0, 1e6*u.nm/147.84)  #10-19, 6-11, 4-7
     #m0, m_max = 4, 7
-    #grating = GratingSetup(0, (22.24 * u.deg).to(u.rad).value, 0, 1e6*u.nm/170.87)
+    #grating = Grating(0, (22.24 * u.deg).to(u.rad).value, 0, 1e6*u.nm/170.87)
     
-    #grating = GratingSetup(0, (15.25 * u.deg).to(u.rad).value, 0, 1e6*u.nm/184.95)
+    #grating = Grating(0, (15.25 * u.deg).to(u.rad).value, 0, 1e6*u.nm/184.95)
     
     spectrograph = SpectrographSetup((m0, m_max), l0, pixels_per_res_elem, focal_length, grating, detector)
     

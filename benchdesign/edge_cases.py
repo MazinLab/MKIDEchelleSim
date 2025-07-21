@@ -56,8 +56,8 @@ def desired_grating(R0, sep, minw=400*u.nm, maxw=800*u.nm, stype='default', plot
 
     # fit the oversimplified model for last pixel to the grating equation results
     opt_params = minimize(fcn=fit_func, params=params, args=())
-    #grating = GratingSetup()
-    #spectro = SpectrographSetup()
+    #grating = Grating()
+    #spectro = Spectrograph()
 
     if plot:
         fig, ax = plt.subplots(1, 3, figsize=(15, 5))

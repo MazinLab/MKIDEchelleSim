@@ -101,7 +101,7 @@ if __name__ == "__main__":
         msf_obj = MKIDSpreadFunction(filename=args.msf)
         sim = msf_obj.sim_settings
     else:
-        raise ValueError('Unknown MSF file type.')
+        raise ValueError('Unknown MSF file type. The reduction cannot continue without a valid file.')
 
     # wavecal
     if args.wavecal.lower().endswith('.h5'):  # the table is not order-sorted and wavecal has yet to be done
@@ -115,10 +115,8 @@ if __name__ == "__main__":
         # TODO add clause that checks array size matches with msf sim object
     elif args.wavecal.lower().endswith('.npz'):  # the wavecal file already exists
         wavecal_file = args.wavecal
-    elif not args.wavecal:
-        pass
     else:
-        raise ValueError('Unknown wavecal file type.')
+        logger.info('No valid wavecal file was passed. Skipping wavelength calibration.')
 
     # extract
     if args.extract.lower().endswith('.h5'):  # the table is not order-sorted or extracted
@@ -128,10 +126,8 @@ if __name__ == "__main__":
     elif args.extract.lower().endswith('.fits'):  # the observation is awaiting extraction
         obs_fits = args.extract
         steps.append('extract')
-    elif not args.extract:
-        pass
     else:
-        raise ValueError('Unknown extraction file type.')
+        logger.info('No valid observation file was passed. Skipping extraction.')
 
     logger.info(f'The {steps} step(s) will be conducted.')
 

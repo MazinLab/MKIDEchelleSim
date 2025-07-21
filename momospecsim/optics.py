@@ -4,11 +4,93 @@ from astropy.constants import h, c
 import logging
 
 from momospecsim.detector import MKIDDetector
+from momospecsim.spectra import Throughput
 
-logger = logging.getLogger('spectrograph')
+logger = logging.getLogger('optics')
 
 
-class GratingSetup:
+class Telescope:
+    def __init__(self,
+                 aperture: float=None,
+                 focal_length: float=None,
+                 filename: str=None):
+        """
+        :param aperture: telescope aperture diameter in mm
+        :param focal_length: telescope focal length in mm
+        :param filename: name of telescope system, must match filename in simfiles/telescope_thruput
+        """
+        self.aperture = None if aperture is None else aperture * u.mm
+        self.focal_length = None if focal_length is None else focal_length * u.mm
+        self.fnum = None if aperture is None else (self.focal_length / self.aperture).decompose().value
+        self.filename = filename
+        self.thruput = open_thruput
+    
+    @property
+    def open_thruput(self):
+        """
+        :return: telescope throughput as SpectralElement object
+        """
+        if self.filename is None:
+            w = np.linspace(300, 900, 10000) * u.nm
+            t = np.linspace(1, 1, 10000) * u.dimensionless_unscaled
+            thru = SpectralElement.from_spectrum1d(Spectrum1D(spectral_axis=w, flux=t))
+        elif self.filename == 'default':
+            w = np.linspace(300, 900, 10000) * u.nm
+            t = np.linspace(1, .95, 10000) * 0.9 * u.dimensionless_unscaled
+            thru = SpectralElement.from_spectrum1d(Spectrum1D(spectral_axis=w, flux=t))
+        else:
+            thru = Throughput(self.filename)
+        return thru
+
+
+class Fiber:
+    def __init__(self, filename=None, num_aperture=None, length=None, core_size=None, incident_angle=None):
+        """
+        :param filename: 
+        :param num_aperture: 
+        :param length: 
+        :param core_size: 
+        :param incident_angle: 
+        """
+        self.filename = filename
+        self.num_aperture = num_aperture
+        self.length = length
+        self.core_size = core_size
+        self.incident_angle = incident_angle
+        self.accept_angle = None if self.num_aperture is None else np.arcsin(self.num_aperture)
+        self.thruput = self.open_thruput
+        
+    @property
+    def open_thruput(self):  # opens file and retrieves throughput
+        if self.filename is None:  # no change to throughput
+            w = np.linspace(300, 900, 10000) * u.nm
+            t = np.linspace(1, 1, 10000) * 0.9 * u.dimensionless_unscaled
+        else:
+            file = pd.read(self.filename, delimiter=' ')
+            w = np.array(file['wavelength'])[::-1] * u.nm
+            loss = np.array(file['dbkm'])[::-1] * u.dB / u.km
+            t = 10 ** ((self.length * u.cm * loss).decompose().value / 10) * u.dimensionless_unscaled
+        
+        return SpectralElement.from_spectrum1d(Spectrum1D(spectral_axis=w, flux=t))
+
+    def attenuate(self, target, aperture=None, fnum=None):
+        """
+        :param target: Target object
+        :param aperture: telescope aperture diameter in Astropy units
+        :param fnum: telescope numerical aperture
+        :return: attenuates target spectrum and size by fiber loss/coupling
+        """
+        target.spectrum *= self.thruput()
+        if aperture is not None and 1 / (2 * fnum) <= self.num_aperture: # tele slower than fiber, use focal plane
+            focal_plane = aperture - 2 * 2350 / np.tan(np.arcsin(1 / (2 * fnum)))
+            ratio = self.core_size / focal_plane
+            target.spectrum *= ratio
+            target.size = self.core_size
+        # TODO incorporate 2D incident angle loss self.incident_angle
+
+
+
+class Grating:
     def __init__(self,
                  alpha: float,
                  delta: float,
@@ -120,20 +202,20 @@ class GratingSetup:
             return m / (self.d * np.cos(beta)) * u.rad
 
 
-class SpectrographSetup:
+class Spectrograph:
     def __init__(self,
                  order_range: tuple,
                  final_wave: u.Quantity,
                  pixels_per_res_elem: float,
                  focal_length: u.Quantity,
-                 grating: GratingSetup,
+                 grating: Grating,
                  detector: MKIDDetector):
         """
         :param tuple order_range: order range of the spectrograph
         :param u.Quantity final_wave: longest wavelength at the edge of detector
         :param float pixels_per_res_elem: number of pixels per resolution element of spectrometer
         :param u.Quantity focal_length: the focal length of the detector
-        :param GratingSetup grating: configured grating
+        :param Grating grating: configured grating
         :param MKIDDetector detector: configured detector
         :return simulated spectrograph
         """
@@ -150,18 +232,6 @@ class SpectrographSetup:
         self.nord = int(self.m_max - self.m0 + 1)
         self.nominal_pixels_per_res_elem = pixels_per_res_elem
         self.nondimensional_lsf_width = 1 / self.design_res
-        logger.info(f'The spectrograph has been setup with the following properties:'
-                    f'\n\tl0: {self.l0}'
-                    f'\n\tR0: {self.detector.design_R0}'
-                    f'\n\tOrders: {self.orders}'
-                    f'\n\tFocal length: {self.focal_length}'
-                    f'\n\tIncidence angle: {np.rad2deg(self.grating.alpha):.3f}'
-                    f'\n\tReflectance angle: {np.rad2deg(self.beta_central_pixel):.2f}'
-                    f'\n\tGroove length: {self.grating.d:.2f}'
-                    f'\n\t# of pixels: {self.detector.n_pixels}'
-                    f'\n\tPixel size: {self.detector.pixel_size}'
-                    f'\n\tPixels per res. element: {self.nominal_pixels_per_res_elem}')
-
 
     def set_beta_center(self, beta, littrow: bool = False):
         """
@@ -175,7 +245,6 @@ class SpectrographSetup:
         if littrow:
             self.grating.alpha = beta
 
-
     @property
     def orders(self):
         """
@@ -187,7 +256,6 @@ class SpectrographSetup:
             self._orders = (self.m0, self.m_max), np.arange(self.m0, self.m_max + 1, dtype=int)
         return self._orders[1]
 
-
     def minimum_wave(self, energy: bool=False):
         """
         :param energy: True if returning energy
@@ -197,7 +265,6 @@ class SpectrographSetup:
             return (self.central_wave(self.m_max) - self.fsr(self.m_max) / 2).to(u.eV, equivalencies=u.spectral())
         else:
             return self.central_wave(self.m_max) - self.fsr(self.m_max) / 2
-
 
     def info_str(self):
         """
@@ -220,7 +287,6 @@ class SpectrographSetup:
             ret.append(f"    m{o:2} @ {w_c:.0f}: {w_i:.0f} - {w_f:.0f}, {p_i:.0f} - {p_f:.0f}")
         return ret
 
-
     def pixel_for_beta(self, beta):
         """
         :param beta: reflectance angle in radians
@@ -228,7 +294,6 @@ class SpectrographSetup:
         """
         delta_angle = np.tan(beta - self.beta_central_pixel)
         return self.focal_length * delta_angle / self.detector.pixel_size + self.detector.n_pixels / 2
-
 
     def beta_for_pixel(self, pixel):
         """
@@ -245,14 +310,12 @@ class SpectrographSetup:
         """
         return self.grating.beta(self.l0, self.m0)
 
-
     @property
     def min_beta_mmax(self):
         """
         :return: smallest reflectance angle (which is at the final order)
         """
         return self.grating.beta(self.minimum_wave(), self.m_max)
-
 
     def blaze(self, wave):
         """
@@ -261,6 +324,15 @@ class SpectrographSetup:
         """
         return self.grating.blaze(self.grating.beta(wave, self.orders[:, None]), self.orders[:, None])
 
+    def blaze_plot(self, title=''):
+        plt.grid()
+        for x, y, o in zip(mask[0], mask[1], self.orders):
+            plt.plot(x, y, label=f'Order {o}')
+        plt.title(title)
+        plt.xlabel('Wavelength (nm)')
+        plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
+        plt.tight_layout()
+        plt.show()
 
     def mean_blaze_eff_est(self, n=10):
         """
@@ -550,7 +622,7 @@ GRATING_CATALOG = np.loadtxt('../benchdesign/newport_masters.txt', delimiter=','
                                     ('width', 'f4'), ('height', 'f4'), ('stock', 'U10')])
 GRATING_CATALOG['l'] = 1e6/GRATING_CATALOG['l']
 
-NEWPORT_GRATINGS = {x['name']: GratingSetup(
+NEWPORT_GRATINGS = {x['name']: Grating(
     0,
     (x['blaze']*u.deg).to(u.rad).value,
     0,
