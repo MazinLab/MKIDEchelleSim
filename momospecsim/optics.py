@@ -2,6 +2,11 @@ import numpy as np
 import astropy.units as u
 from astropy.constants import h, c
 import logging
+import matplotlib.pyplot as plt
+
+from specutils import Spectrum1D
+from synphot import SpectralElement
+import pandas as pd
 
 from momospecsim.detector import MKIDDetector
 from momospecsim.spectra import Throughput
@@ -23,7 +28,8 @@ class Telescope:
         self.focal_length = None if focal_length is None else focal_length * u.mm
         self.fnum = None if aperture is None else (self.focal_length / self.aperture).decompose().value
         self.filename = filename
-        self.thruput = open_thruput
+        self.thruput = self.open_thruput
+        logger.info('Telescope initialized.')
     
     @property
     def open_thruput(self):
@@ -57,16 +63,17 @@ class Fiber:
         self.length = length
         self.core_size = core_size
         self.incident_angle = incident_angle
-        self.accept_angle = None if self.num_aperture is None else np.arcsin(self.num_aperture)
+        self.accept_angle = None if self.num_aperture is None else np.arcsin(self.num_aperture) * 2
         self.thruput = self.open_thruput
+        logger.info('Fiber initialized.')
         
     @property
     def open_thruput(self):  # opens file and retrieves throughput
         if self.filename is None:  # no change to throughput
             w = np.linspace(300, 900, 10000) * u.nm
-            t = np.linspace(1, 1, 10000) * 0.9 * u.dimensionless_unscaled
+            t = np.linspace(1, 1, 10000) * u.dimensionless_unscaled
         else:
-            file = pd.read(self.filename, delimiter=' ')
+            file = pd.read_csv(self.filename, delimiter=' ')
             w = np.array(file['wavelength'])[::-1] * u.nm
             loss = np.array(file['dbkm'])[::-1] * u.dB / u.km
             t = 10 ** ((self.length * u.cm * loss).decompose().value / 10) * u.dimensionless_unscaled
@@ -78,38 +85,40 @@ class Fiber:
         :param target: Target object
         :param aperture: telescope aperture diameter in Astropy units
         :param fnum: telescope numerical aperture
-        :return: attenuates target spectrum and size by fiber loss/coupling
+        :return: attenuates target spectrum and size by fiber loss/coupling and incident angle misalignment
         """
-        target.spectrum *= self.thruput()
+        target.spectrum *= self.thruput
         if aperture is not None and 1 / (2 * fnum) <= self.num_aperture: # tele slower than fiber, use focal plane
             focal_plane = aperture - 2 * 2350 / np.tan(np.arcsin(1 / (2 * fnum)))
             ratio = self.core_size / focal_plane
             target.spectrum *= ratio
             target.size = self.core_size
-        # TODO incorporate 2D incident angle loss self.incident_angle
-
+        
+        if self.incident_angle is not None:
+            angle_thru = 1 - (self.incident_angle / self.accept_angle)
+            target.spectrum *= angle_thru
 
 
 class Grating:
     def __init__(self,
                  alpha: float,
                  delta: float,
-                 beta_center: float,
+                 beta_center,
                  groove_length: u.Quantity):
         """
         Simulation of an echelle/echellete grating for spectrometer.
 
-        :param float alpha: incident angle in radians
-        :param float delta: blaze angle in radians
-        :param float beta_center: reflectance angle in radians
+        :param float alpha: incident angle in degrees
+        :param float delta: blaze angle in degrees
+        :param beta_center: reflectance angle in degrees (or littrow, equal to alpha)
         :param u.Quantity groove_length: d, length/groove in units of wavelength (same as schroeder sigma)
         """
-        self.alpha = alpha*u.rad
-        self.delta = delta*u.rad
-        self.beta_center = beta_center*u.rad
-        self.d = groove_length
+        self.alpha = (alpha * u.degree).to(u.rad)
+        self.delta = (delta * u.degree).to(u.rad)
+        self.beta_center = self.alpha if beta_center == 'littrow' else (beta_center * u.degree).to(u.rad)
+        self.d = groove_length * u.nm
         self.empiric_blaze_factor = 1.0
-
+        logger.info('Grating initialized.')
 
     def __str__(self) -> str:
         """
@@ -204,14 +213,16 @@ class Grating:
 
 class Spectrograph:
     def __init__(self,
-                 order_range: tuple,
+                 m0: int,
+                 m_max: int,
                  final_wave: u.Quantity,
                  pixels_per_res_elem: float,
                  focal_length: u.Quantity,
                  grating: Grating,
                  detector: MKIDDetector):
         """
-        :param tuple order_range: order range of the spectrograph
+        :param int m0: initial order
+        :param int m_max: final order
         :param u.Quantity final_wave: longest wavelength at the edge of detector
         :param float pixels_per_res_elem: number of pixels per resolution element of spectrometer
         :param u.Quantity focal_length: the focal length of the detector
@@ -219,19 +230,18 @@ class Spectrograph:
         :param MKIDDetector detector: configured detector
         :return simulated spectrograph
         """
-        if order_range[0] > order_range[1]:
-            order_range = order_range[::-1]
-        self.m0 = order_range[0]
-        self.m_max = order_range[1]
-        self.l0 = final_wave
+        self.m0 = m0
+        self.m_max = m_max
+        self.l0 = final_wave * u.nm
         self.grating = grating
         self.detector = detector
-        self.focal_length = focal_length
-        self.pixel_scale = np.arctan(self.detector.pixel_size / self.focal_length)
+        self.focal_length = focal_length * u.mm
+        self.pixel_scale = np.arctan(self.detector.pix_size / self.focal_length)
         self.beta_central_pixel = self.grating.beta_center
         self.nord = int(self.m_max - self.m0 + 1)
         self.nominal_pixels_per_res_elem = pixels_per_res_elem
         self.nondimensional_lsf_width = 1 / self.design_res
+        logger.info('Spectrograph initialized.')
 
     def set_beta_center(self, beta, littrow: bool = False):
         """
@@ -293,14 +303,14 @@ class Spectrograph:
         :return: pixel at beta
         """
         delta_angle = np.tan(beta - self.beta_central_pixel)
-        return self.focal_length * delta_angle / self.detector.pixel_size + self.detector.n_pixels / 2
+        return self.focal_length * delta_angle / self.detector.pix_size + self.detector.npix / 2
 
     def beta_for_pixel(self, pixel):
         """
         :param pixel: pixel index
         :return: reflectance angle (radians) at pixel
         """
-        center_offset = self.detector.pixel_size * (pixel - self.detector.n_pixels / 2)
+        center_offset = self.detector.pix_size * (pixel - self.detector.npix / 2)
         return self.beta_central_pixel + np.arctan(center_offset / self.focal_length)
 
     @property
@@ -324,9 +334,12 @@ class Spectrograph:
         """
         return self.grating.blaze(self.grating.beta(wave, self.orders[:, None]), self.orders[:, None])
 
-    def blaze_plot(self, title=''):
+    def blaze_plot(self, title='', waves=None, spectrum=None):
         plt.grid()
-        for x, y, o in zip(mask[0], mask[1], self.orders):
+        order_mask = self.order_mask(waves.to(u.nm), fsr_edge=False)
+        masked_spec = [spectrum[i, order_mask[i]] for i in range(len(self.orders))]
+        masked_wave = [waves[order_mask[i]].to(u.nm) for i in range(len(self.orders))]
+        for x, y, o in zip(masked_wave, masked_spec, self.orders):
             plt.plot(x, y, label=f'Order {o}')
         plt.title(title)
         plt.xlabel('Wavelength (nm)')
@@ -361,12 +374,12 @@ class Spectrograph:
 
         if fsr_edge:
             o = self.orders[:, None]
-            c_wave = self.pixel_to_wavelength(self.detector.n_pixels / 2, o)
+            c_wave = self.pixel_to_wavelength(self.detector.npix / 2, o)
             fsr = c_wave / o
             return np.abs(wave - c_wave) < fsr / 2
         else:
             x = self.wavelength_to_pixel(wave, self.orders[:, None])
-            return (x >= 0) & (x < self.detector.n_pixels)
+            return (x >= 0) & (x < self.detector.npix)
 
 
     def edge_wave(self, fsr=True):
@@ -374,7 +387,7 @@ class Spectrograph:
         :param fsr: True to return the FSR edges
         :return: return the wavelengths at detector edge
         """
-        pix = self.detector.pixel_indices[[0, self.detector.n_pixels // 2, -1]] + .5
+        pix = self.detector.pixel_indices[[0, self.detector.npix // 2, -1]] + .5
         fiducial_waves = self.pixel_to_wavelength(pix, self.orders[:, None])
         if not fsr:
             return fiducial_waves[:, [0, -1]]
@@ -561,7 +574,7 @@ class Spectrograph:
         """
         :return: design resolution for spectrometer, assume that m0 FSR fills detector with some sampling
         """
-        dlambda = self.fsr(self.m0) / self.detector.n_pixels * self.nominal_pixels_per_res_elem
+        dlambda = self.fsr(self.m0) / self.detector.npix * self.nominal_pixels_per_res_elem
         return self.l0 / dlambda
 
 
@@ -571,7 +584,7 @@ class Spectrograph:
         :return: actual average resolution for spectrometer
         """
         w = self.edge_wave(fsr=False)
-        return (w.mean(1) / (np.diff(w, axis=1).T / self.detector.n_pixels * self.nominal_pixels_per_res_elem)).ravel()
+        return (w.mean(1) / (np.diff(w, axis=1).T / self.detector.npix * self.nominal_pixels_per_res_elem)).ravel()
 
 
     def plot_echellogram(self, center_orders: bool=True, title: str='', blaze: bool=False):
@@ -592,14 +605,14 @@ class Spectrograph:
         plt.title(f'a={self.beta_central_pixel:.1f} m={self.m0}-{self.m_max}')
         fsr_edges = self.edge_wave(fsr=True)
         for ii, i in enumerate(self.orders):
-            waves = w[ii, [0, self.detector.n_pixels // 2, -1]]
+            waves = w[ii, [0, self.detector.npix // 2, -1]]
             plt.plot(self.wavelength_to_pixel(waves, i), [i] * 3, '*', color=f'C{ii}')
             plt.plot(self.wavelength_to_pixel(fsr_edges[ii], i), [i] * 2, '.', color=f'C{ii}')
         plt.xlabel('Pixel')
         plt.ylabel('Order')
         plt.sca(axes[1])
         for ii, i in enumerate(self.orders):
-            waves = w[ii, [0, self.detector.n_pixels // 2, -1]]
+            waves = w[ii, [0, self.detector.npix // 2, -1]]
             oset = waves[1] if center_orders else 0
             plt.plot(waves - oset, [i] * 3, '*', color=f'C{ii}')
             plt.plot(fsr_edges[ii] - oset, [i] * 2, '.', color=f'C{ii}',

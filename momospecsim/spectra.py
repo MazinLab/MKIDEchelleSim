@@ -6,9 +6,16 @@ from astropy import units as u
 from astropy.constants import R_sun
 from specutils import Spectrum1D
 from synphot import SpectralElement, SourceSpectrum, units, blackbody
-from synphot.models import Box1D, BlackBodyNorm1D, ConstFlux1D, Empirical1D
+from synphot.models import Box1D, BlackBody1D, ConstFlux1D, Empirical1D
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+import scipy.ndimage as ndi
+import warnings
 
 from momospecsim.utils.general import gauss
+from momospecsim.detector import wave_to_phase
+from mkidpipeline.photontable import Photontable
+from mkidpipeline.steps.buildhdf import buildfromarray
 
 u.photlam = u.photon / u.s / u.cm ** 2 / u.AA  # new unit name, photon flux per wavelength
 
@@ -20,13 +27,9 @@ def Throughput(filename):
     :param filename: wavelength in nm, .txt: space-delimited, .txt/.csv: header is wavelength/transmission, .dat: none
     :return: throughput as dimensionless SpectralElement object
     """
-    if filename.endswith('.txt'):
-        file = pd.read(filename, delimiter=' ')
-        w = np.array(file['wavelength'])[::-1] * u.nm
-        t = np.array(file['transmission'])[::-1] * u.dimensionless_unscaled
-
-    elif filename.endswith('.csv') or filename.endswith('.txt'):
-        file = pd.read_csv(filename, delimiter=',')
+    if filename.endswith('.csv') or filename.endswith('.txt'):
+        delim = ',' if filename.endswith('.csv') else ' '
+        file = pd.read_csv(filename, delimiter=delim)
         w = np.array(file['wavelength'])[::-1] * u.nm
         thru = np.array(file['transmission'])[::-1] * u.dimensionless_unscaled
         thru[thru < 0] = 0
@@ -52,7 +55,7 @@ def FridgeTransmission():
     """
     :return: transmission through two Asahi supercold fridge filters as SpectralElement object
     """
-    file = pd.read_csv('simfiles/fridge_thruput/fridge_filter.csv', delimiter=',')
+    file = pd.read_csv('simfiles/thruput/Asahi_YSC0750.csv', delimiter=',')
     thru = np.array(file['transmission'])[::-1] * u.dimensionless_unscaled
     thru[thru < 0] = 0
     w = np.array(file['wavelength'])[::-1] * u.nm
@@ -130,9 +133,7 @@ def BlackbodyModel(distance: float, radius: float, teff: float):
     :param float teff: effective temperature of model star
     :return: blackbody model of star as SourceSpectrum object
     """
-    sp = SourceSpectrum(BlackBodyNorm1D, temperature=teff)
-    # remove R_sun and 1 kpc normalization, renormalize to desired specs
-    sp *= ((radius / distance) ** 2 / (R_sun / 1 * u.kpc) ** 2).decompose()
+    sp = SourceSpectrum(BlackBody1D, temperature=teff)  # returns photlam per steradian
     return sp
 
 
@@ -243,18 +244,22 @@ class Target:
         :param seeing: seeing disk diameter in arcsec (only used if target is on_sky)
         :param on_sky: pass True if observation is on sky
         """
-        self.spectype = spectype,
-        self.dist = dist,
-        self.rad = rad,
-        self.temp = temp,
-        self.spec_file = spec_file,
-        self.minwave = minwave,
-        self.maxwave = maxwave,
-        self.objsize = objsize,
-        self.seeing = seeing,
+        self.spectype = spectype
+        self.dist = dist
+        self.rad = rad
+        self.temp = temp
+        self.spec_file = spec_file
+        self.minwave = minwave * u.nm
+        self.maxwave = maxwave * u.nm
+        self.objsize = objsize
+        self.seeing = seeing
         self.on_sky = True if spectype is 'sky_emission' else on_sky
         self._spectrum = None  # will be updated as spectrum goes through changes
         self._size = None  # will be updated as apparent size goes through changes
+        self._waveset = None
+        self._photonlist = None
+        self.photons_realign = None
+        logger.info('Target initialized.')
 
     @property
     def spectrum(self):
@@ -271,10 +276,32 @@ class Target:
     @size.setter
     def size(self, size):
         self._size = size
+        
+    @property
+    def waveset(self):
+        return self._waveset
+    
+    @waveset.setter
+    def waveset(self, waveset):
+        self._waveset = waveset
 
-    def init_spectrum(self, aperture: u.Quantity = None):
+    @property
+    def photonlist(self):
+        return self._photonlist
+
+    @photonlist.setter
+    def photonlist(self, photonlist):
+        self._photonlist = photonlist
+
+    @property
+    def fov(self):
         """
-        :param aperture: telescope aperture diameter in mm
+        :return: field of view of target in arcsec
+        """
+        return np.pi * (self.size / 2) ** 2
+
+    def init_spectrum(self):
+        """
         :return: initial spectrum of chosen type
         """
         if self.spectype == 'blackbody':
@@ -298,20 +325,25 @@ class Target:
         else:
             raise ValueError("Only 'blackbody', 'phoenix', 'flat', 'emission', 'sky_emission', "
                              "or 'from_file' are supported for spectype.")
-        init_spectrum = spec * FineGrid(self.minwave, self.maxwave)  # increases sampling rate
-        return init_spectrum + SkyEmission(fov=self.fov(aperture=aperture))
+        init_spectrum = spec * self.fov * FineGrid(self.minwave, self.maxwave)  # increases sampling rate
+        if self.on_sky:
+            return init_spectrum + SkyEmission(fov=self.fov)
+        return init_spectrum
 
     def clip_spectrum(self, clip_range: tuple=None):
         """
         :param tuple clip_range: wavelength range to retain
         :return: SourceSpectrum with all entries outside of clip_range discarded
         """
+        if self.spectrum is None:
+            raise ValueError("spectrum is None, nothing to clip!")
         clip_range = [self.minwave, self.maxwave] if clip_range is None else clip_range
         mask = (self.spectrum.waveset >= clip_range[0]) & (self.spectrum.waveset <= clip_range[-1])
         self.spectrum = SourceSpectrum.from_spectrum1d(Spectrum1D(
             spectral_axis=self.spectrum.waveset[mask],
             flux=self.spectrum(self.spectrum.waveset[mask])))
         logger.info(f"Clipped spectrum to{clip_range}.")
+        self.waveset = self.spectrum.waveset
 
     def init_size(self, aperture=None, fiber_angle=None):
         """
@@ -321,24 +353,14 @@ class Target:
         """
         if self.on_sky:  # takes largest of Airy disk, seeing disk, and object size
             airy = ((1.029 * (self.minwave + self.maxwave) / 2 / aperture).decompose() * u.rad).to(u.arcsec).value
-            init_size = np.max([self.size / 1000, self.seeing, airy])
-        else:  # returns size given fiber acceptance angle
-            init_size = self.dist / np.tan(fiber_angle) * 2
-            
-        return init_size
+            return np.max([self.size / 1000, self.seeing, airy])
+        return self.dist / np.tan(fiber_angle) * 2  # returns size given fiber acceptance angle
 
-    def fov(self, aperture: u.Quantity = None):
-        """
-        :param aperture: telescope aperture diameter in Astropy units
-        :return: field of view of target in arcsec
-        """
-        return np.pi * (self.init_size(aperture=aperture) / 2) ** 2
-    
     def diverge(self, fiber, distance):
         """
         :param fiber: Fiber object
         :param distance: distance between target and new fiber
-        :return: target spectrum throughput reduced, such as direct fiber to fiber coupling
+        :return: None (target spectrum throughput reduced, such as direct fiber to fiber coupling)
         """
         if self.spectrum is None:
             raise ValueError("spectrum is None, nothing to diverge!")
@@ -346,15 +368,115 @@ class Target:
         ratio = self.size / new_size
         self.spectrum *= ratio
 
+    def optically_broaden(self, nondim_lsf_width, axis: int = 1):
+        """
+        :param nondim_lsf_width: Spectrograph nondimensional LSF width
+        :param axis: axis in which to optically-broaden
+        :return: None (spectrum is optically-broadened by spectrograph)
+        
+        The optical PSF comes from effects prior to, from, and after the grating. The PSF will be both chromatic
+        and non-Gaussian with chromaticity stemming from both the optics and from aberrations as a result of slit
+        images taking different paths through the optics. The former would slowly vary over the full wavelength
+        domain while the latter would vary over a single order (as well as over the wavelengths in the order). It is
+        reasonable to assume that an achromatic Gaussian may be used to represent the intensity profile of slit image
+        produced by the camera for a well-designed optical spectrograph. Since this is an effect on the image it can
+        be freely done on a per-order basis without worry about interplay between the orders, this facilitates
+        low-cost support for a first order approximation of chromaticity by varying the Gaussian width with each order.
+
+        It is technically a sinc of the grating convolved with the optical spot.
+        Kernel width is function of order, data is a function of order.
+
+        NB a further approximation can be made by moving a space space with constant sampling in dl/l=c and arguing
+        that the width of the LSF is directly proportional to lambda. Doing this does change the effective resolution
+        though so care should be taken that there are sufficient samples per pixel, with this approximation the kernel
+        a single kernel of fixed width in dl/lambda.
+
+        Treat it as constant and define at the middle of the wavelength range.
+        """
+        if self.spectrum is None:
+            raise ValueError("spectrum is None, nothing to broaden!")
+        sample_width = self.waveset.mean() * nondim_lsf_width / np.diff(self.waveset).mean()
+        self.spectrum = ndi.gaussian_filter1d(self.spectrum, sample_width / (2 * np.sqrt(2 * np.log(2))), axis=axis) * self.spectrum.unit
+
     def plot(self, title=''):
         if self.spectrum is None:
             raise ValueError("spectrum is None, nothing to plot!")
         plt.grid()
-        plt.plot(self.spectrum.waveset.to(u.nm), self.spectrum(spectrum.waveset))
+        plt.plot(self.waveset.to(u.nm), self.spectrum(self.waveset))
         plt.title(title)
         plt.xlabel('Wavelength (nm)')
         plt.ylabel(r'Photon Flux Density (ph $\AA^{-1} cm^{-2} s^{-1}$)')
         plt.tight_layout()
         plt.show()
 
-            
+    def plot_heatmap(self, detector):
+        npix = detector.npix
+        idx = [np.where(self.photonlist.resID == detector.resid_map[j]) for j in range(npix)]
+        self.photons_realign = [(self.photonlist.wavelength[idx[j]] / detector.phase_offsets[j]).tolist() for j in range(npix)]
+
+        bin_edges = np.linspace(-1, -0.1, 100)
+        centers = bin_edges[:-1] + np.diff(bin_edges) / 2
+        hist_array = np.zeros([npix, len(bin_edges) - 1])
+        for j in detector.pixel_indices:
+            if self.photons_realign[j]:
+                counts, edges = np.histogram(a=self.photons_realign[j], bins=bin_edges)
+                hist_array[j, :] = np.array([float(x) for x in counts])
+        plt.imshow(hist_array[:, ::-1].T, extent=[1, npix, -1, -0.1], aspect='auto', norm=LogNorm())
+        cbar = plt.colorbar()
+        cbar.ax.set_ylabel('Photon Count')
+        plt.title(f"Binned Pixel Heat Map w/o Offset")
+        plt.xlabel("Pixel Index")
+        plt.ylabel(r"Phase ($\times \pi /2$)")
+        plt.tight_layout()
+        plt.show()
+        
+    def plot_comparison(self, spectrograph, detector, engine, convol_result, blazed_spectrum, reduce_factor, exptime):
+        logger.info(msg='Plotting for debugging...')
+        warnings.filterwarnings(action="ignore")  # ignore tight_layout warnings
+
+        lambda_pixel = spectrograph.pixel_wavelengths().to(u.nm)
+        nord = spectrograph.nord
+        npix = detector.npix
+        
+        # sum the convolution to go to pixel-order array size:
+        convol_sum = np.sum(convol_result, axis=0)
+
+        # use FSR to bin and order sort:
+        fsr = spectrograph.fsr(order=spectrograph.orders).to(u.nm)
+        hist_bins = np.empty((nord + 1, npix))  # choosing rough histogram bins by using FSR of each pixel/wave
+        hist_bins[0, :] = (lambda_pixel[-1, :] - fsr[-1] / 2).value
+        hist_bins[1:, :] = [(lambda_pixel[i, :] + fsr[i] / 2).value for i in range(nord)[::-1]]
+        hist_bins = wave_to_phase(waves=hist_bins, minwave=self.minwave, maxwave=self.maxwave)
+
+        photons_binned = np.empty((nord, npix))
+        for j in range(npix):
+            photons_binned[:, j], _ = np.histogram(a=self.photons_realign[j], bins=hist_bins[:, j], density=False)
+
+        # normalize to level of convolution since that's where it came from and calculate noise:
+        photons_binned = (
+                photons_binned * u.ph * reduce_factor[None, :] / (exptime * u.s)).to(u.ph / u.s).value
+
+        lambda_left = spectrograph.pixel_wavelengths(edge='left')
+        blazed_int_spec = np.array([engine.lambda_to_pixel_space(array_wave=self.waveset,
+                                                              array=blazed_spectrum[i],
+                                                              leftedge=lambda_left[i]) for i in range(nord)])
+
+        # plotting comparison between flux-integrated spectrum, integrated/convolved spectrum, & final counts FSR-binned
+        plt.grid()
+        for n in range(nord - 1):
+            plt.plot(lambda_pixel[n], photons_binned[::-1][n], color='k', linewidth=1, linestyle='--')
+            plt.plot(lambda_pixel[n], convol_sum[n], color='red', linewidth=1.5, alpha=0.5)
+            plt.plot(lambda_pixel[n], blazed_int_spec[n], color='b')
+
+        plt.ylabel(r"Flux (phot $cm^{-2} s^{-1})$")
+        plt.xlabel('Wavelength (nm)')
+        plt.title('Comparison of Pre/Post-Convolution and Photon Table Spectrum')
+        plt.plot(lambda_pixel[-1], photons_binned[::-1][-1], color='k', linewidth=1, linestyle='--',
+                 label='Photon Table Binned')
+        plt.plot(lambda_pixel[-1], convol_sum[-1], color='r', linewidth=1.5, alpha=0.5, label='Post-Convolution')
+        plt.plot(lambda_pixel[-1], blazed_int_spec[-1], color='b', label='Pre-Convolution')
+        plt.tight_layout()
+        plt.legend()
+        plt.show()
+        pass
+

@@ -3,113 +3,51 @@ import numpy as np
 import matplotlib.pyplot as plt
 import astropy.units as u
 from astropy.constants import R_sun
+import logging
 
 # local imports
-from momospecsim.optics import Grating, Spectrograph
+from momospecsim.spectra import Target
+from momospecsim.optics import Fiber, Telescope, Grating, Spectrograph
 from momospecsim.detector import MKIDDetector
 import momospecsim.engine as engine
+
+logger = logging.getLogger('specsimsettings')
 
 
 class SpecSimSettings:
     def __init__(
             self,
-            minwave_nm: float = None,
-            maxwave_nm: float = None,
-            npix: int = None,
-            pixelsize_um: float = None,
-            designR0: float = None,
-            l0_nm: float = None,
-            alpha_deg: float = None,
-            delta_deg: float = None,
-            beta_deg: float = None,
-            groove_length_nm: float = None,
-            m0: int = None,
-            m_max: int = None,
-            pixels_per_res_elem: float = None,
-            focal_length_mm: float = None,
-            resid_file: str = None,
-            spectype: str = None,
-            spec_file: str = None,
-            exptime_s: float = None,
-            telearea_cm2: float = None,
-            fov: float = None,
-            distance_ps: float = None,
-            radius_Rsun: float = None,
-            temp_K: float = None,
-            on_sky: bool = None,
-            telename: str = None,
-            simpconvol: bool = None,
-            randomseed: int = None
+            outdir: str = '',
+            simpconvol: bool = False,
+            waveconvol: bool = False,
+            target: Target = None,
+            telescope: Telescope = None,
+            telefiber: Fiber = None,
+            fiberarray: Fiber = None,
+            spectrograph: Spectrograph = None,
+            detector: MKIDDetector = None
     ):
         """
-        :param float minwave_nm: The minimum wavelength of the spectrometer in nm.
-        :param float maxwave_nm: The maximum wavelength of the spectrometer in nm.
-        :param int npix: The number of pixels in the MKID detector.
-        :param float pixelsize_um: The length of the MKID pixel in the dispersion direction in um.
-        :param float designR0: The expected resolution at l0.
-        :param float l0_nm: The longest wavelength of any order in use in nm.
-        :param float alpha_deg: The incidence angle of light on the grating in degrees.
-        :param float delta_deg: The grating blaze angle in degrees.
-        :param float beta_deg: The reflectance angle at the central pixel in degrees.
-        :param float groove_length_nm: The distance between slits of the grating in nm.
-        :param int m0: The initial order, at the longer wavelength end.
-        :param int m_max: The final order, at the shorter wavelength end.
-        :param float pixels_per_res_elem: Number of pixels per spectral resolution element for the spectrograph.
-        :param float focal_length_mm: The focal length of the detector in mm.
-        :param str resid_file: Directory/filename of the resonator IDs file.
-        :param str spectype: The type of spectrum to be simulated.
-        :param str spec_file: Directory/filename of the spectrum file.
-        :param float exptime_s: The exposure time of the observation in seconds.
-        :param float telearea_cm2: The telescope area of the observation in cm2.
-        :param float fov: The field of view of the observation in arcsec2.
-        :param distance_ps: The distance to target in parsecs.
-        :param radius_Rsun: The radius of the target in units of R_sun.
-        :param float temp_K: The temperature of the spectrum in K.
-        :param bool on_sky: True if the observation is simulated on sky (atmosphere, sky emission, etc.).
-        :param str telename: The name of the telescope or mirror/lens coating for telescope transmission calculation.
-        :param bool simpconvol: True if conducting a simplified convolution with MKIDs.
-        :param int randomseed: Random seed for reproducing simulation.
+        :param outdir: output directory
+        :param simpconvol: if passed, conducts simplified convolution
+        :param waveconvol: if passed, conducts convolution w.r.t. wavelength not energy
+        :param target: Target object
+        :param telescope: Telescope object
+        :param telefiber: telescope Fiber object
+        :param fiberarray: Fiber array object
+        :param spectrograph: Spectrograph object
+        :param detector: MKIDDetector object
         """
-        self.minwave = float(minwave_nm) * u.nm if not isinstance(minwave_nm, u.Quantity) else minwave_nm
-        self.maxwave = float(maxwave_nm) * u.nm if not isinstance(maxwave_nm, u.Quantity) else maxwave_nm
-        self.npix = int(npix)
-        self.pixelsize = float(pixelsize_um) * u.micron if not isinstance(pixelsize_um, u.Quantity) else pixelsize_um
-        self.designR0 = float(designR0)
-        if l0_nm == 'same':
-            self.l0 = self.maxwave
-        else:
-            self.l0 = float(l0_nm) * u.nm if not isinstance(l0_nm, u.Quantity) else l0_nm
-        self.alpha = np.deg2rad(float(alpha_deg))
-        self.delta = np.deg2rad(float(delta_deg))
-        if beta_deg == 'littrow':
-            self.beta = self.alpha
-        else:
-            self.beta = np.deg2rad(float(beta_deg))
-        self.groove_length = float(groove_length_nm) * u.nm if not isinstance(groove_length_nm,
-                                                                              u.Quantity) else groove_length_nm
-        self.order_range = (int(m0), int(m_max))
-        self.pixels_per_res_elem = float(pixels_per_res_elem)
-        self.focal_length = float(focal_length_mm) * u.mm if not isinstance(focal_length_mm,
-                                                                            u.Quantity) else focal_length_mm
-        self.resid_file = resid_file
-        self.spectype = spectype
-        self.spec_file = spec_file
-        if exptime_s is not None:
-            self.exptime = float(exptime_s) * u.s if not isinstance(exptime_s, u.Quantity) else exptime_s
-        if telearea_cm2 is not None:
-            self.telearea = float(telearea_cm2) * u.cm ** 2 if not isinstance(telearea_cm2,
-                                                                              u.Quantity) else telearea_cm2
-        self.fov = fov
-        if distance_ps is not None:
-            self.distance = float(distance_ps) * u.parsec if not isinstance(distance_ps, u.Quantity) else distance_ps
-        if radius_Rsun is not None:
-            self.radius = float(radius_Rsun) * R_sun
-        if temp_K is not None:
-            self.temp = float(temp_K)
-        self.on_sky = on_sky
-        self.telename = telename
+        self.outdir = outdir
         self.simpconvol = simpconvol
-        self.randomseed = randomseed
+        self.waveconvol = waveconvol
+        self.target = target
+        self.telescope = telescope
+        self.telefiber = telefiber
+        self.fiberarray = fiberarray
+        self.spectrograph = spectrograph
+        self.detector = detector
+        logger.info('SpecSimSettings initialized.')
 
     def __eq__(self, other):
         if self.__class__ != other.__class__:

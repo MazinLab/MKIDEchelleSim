@@ -69,20 +69,18 @@ def _determine_apodization(x, pixel_samples_frac, pixel_max_npoints):
 
 def draw_photons(convol_wave,
                  convol_result,
-                 area: u.Quantity = np.pi * (4 * u.cm) ** 2,
                  exptime: u.Quantity = 1 * u.s,
                  energy=False,
                  randomseed=None):
     """
     :param convol_wave: wavelength array that matches result
     :param convol_result: convolution array
-    :param area: surface area of the telescope
     :param exptime: exposure time of the observation
     :param energy: True if photon list in energy
     :param randomseed: random seed
     :return: the random arrival times and randomly chosen wavelengths from CDF
     """
-    logger.info(f"Beginning photon draw, with exposure time: {exptime} and telescope area: {area:.2f}.")
+    logger.info(f"Beginning photon draw, with exposure time: {exptime}.")
 
     # compute the CDF from dNdE, sort, and set up an interpolating function
     cdf_shape = int(np.prod(convol_result.shape[:2])), convol_result.shape[-1]  # reshaped to 5 * photons, 2048 pix
@@ -94,10 +92,7 @@ def draw_photons(convol_wave,
     wave_unit = u.eV if energy else u.nm
     wave_pix = wave_pix.to(wave_unit).value
 
-    cdf = np.cumsum(result_pix, axis=0)
-    rest_of_way_to_photons = area * exptime
-    cdf *= rest_of_way_to_photons
-    cdf = cdf.decompose()
+    cdf = (np.cumsum(result_pix, axis=0) * exptime).decompose()
     total_photons = cdf[-1, :]
 
     # Poisson draw after limiting because MKID saturation rate
@@ -123,7 +118,7 @@ def draw_photons(convol_wave,
         np.random.seed(randomseed)
         l_photons.append(cdf_interp(np.random.uniform(0, 1, size=n)) * wave_unit)
 
-        np.random.seed(randomseed * 2)  # prevent potential correlation of wavelength with arrival time
+        np.random.seed(randomseed + 23)  # prevent potential correlation of wavelength with arrival time
         t_photons.append(np.random.uniform(0, 1, size=n) * exptime)
 
     logger.info("Completed photon draw, obtained random arrival times and wavelengths for individual photons.")
@@ -136,49 +131,7 @@ class Engine:
         :param spectrograph: Spectrograph object
         """
         self.spectrograph = spectrograph
-
-    def blaze(self, wave, spectra):
-        """
-        :param wave: wavelengths
-        :param spectra: fluxes
-        :return: blazed and masked spectra
-        """
-        blaze_efficiencies = self.spectrograph.blaze(wave)
-        order_mask = self.spectrograph.order_mask(wave.to(u.nm), fsr_edge=False)
-        blazed_spectrum = blaze_efficiencies * spectra
-        masked_blaze = [blazed_spectrum[i, order_mask[i]] for i in range(len(self.spectrograph.orders))]
-        masked_waves = [wave[order_mask[i]].to(u.nm) for i in range(len(self.spectrograph.orders))]
-        logger.info('Multiplied spectrum with blaze efficiencies.')
-        return blazed_spectrum, masked_waves, masked_blaze
-
-    def optically_broaden(self, wave, flux: u.Quantity, axis: int = 1):
-        """
-        :param wave: wavelength array
-        :param flux: array of flux, may be a multidimensional array as long as the last dimension matches wave
-        :param axis: the axis in which to optically-broaden
-        :return: Gaussian filtered spectrum from spectrograph LSF width
-
-        The optical PSF comes from effects prior to, from, and after the grating. The PSF will be both chromatic
-        and non-Gaussian with chromaticity stemming from both the optics and from aberrations as a result of slit
-        images taking different paths through the optics. The former would slowly vary over the full wavelength
-        domain while the latter would vary over a single order (as well as over the wavelengths in the order). It is
-        reasonable to assume that an achromatic Gaussian may be used to represent the intensity profile of slit image
-        produced by the camera for a well-designed optical spectrograph. Since this is an effect on the image it can
-        be freely done on a per-order basis without worry about interplay between the orders, this facilitates
-        low-cost support for a first order approximation of chromaticity by varying the Gaussian width with each order.
-
-        It is technically a sinc of the grating convolved with the optical spot.
-        Kernel width is function of order, data is a function of order.
-
-        NB a further approximation can be made by moving a space space with constant sampling in dl/l=c and arguing
-        that the width of the LSF is directly proportional to lambda. Doing this does change the effective resolution
-        though so care should be taken that there are sufficient samples per pixel, with this approximation the kernel
-        a single kernel of fixed width in dl/lambda.
-
-        Treat it as constant and define at the middle of the wavelength range.
-        """
-        sample_width = wave.mean() * self.spectrograph.nondimensional_lsf_width / np.diff(wave).mean()
-        return ndi.gaussian_filter1d(flux, sample_width / (2 * np.sqrt(2 * np.log(2))), axis=axis) * flux.unit
+        logger.info('Engine initialized.')
 
     def build_mkid_kernel(self, n_sigma: float, sampling, energy=False):
         """
@@ -207,7 +160,7 @@ class Engine:
         pixel_rescale = self.spectrograph.pixel_rescale(oversampling, energy=energy)
         dl_mkid_max = self.spectrograph.dl_mkid_max(energy=energy)
         sampling = self.spectrograph.sampling(oversampling, energy=energy)
-        npix = self.spectrograph.detector.n_pixels
+        npix = self.spectrograph.detector.npix
         nord = self.spectrograph.nord
         unit = u.eV if energy else u.nm
         return np.array([[np.linspace(-n_sig * (pixel_rescale[i, j] * dl_mkid_max / sampling).to(unit).value / SIG2FWHM,
