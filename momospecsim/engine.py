@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.interpolate as interp
-from scipy.signal import oaconvolve, gaussian
+from scipy.signal import oaconvolve
+from scipy.signal.windows import gaussian
 import scipy.ndimage as ndi
 from scipy.constants import h, c
 from scipy.stats import norm
