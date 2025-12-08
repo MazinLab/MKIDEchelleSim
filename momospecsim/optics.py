@@ -4,7 +4,7 @@ from astropy.constants import h, c
 import logging
 import matplotlib.pyplot as plt
 
-from specutils import Spectrum1D
+from specutils import Spectrum
 from synphot import SpectralElement
 import pandas as pd
 
@@ -39,11 +39,11 @@ class Telescope:
         if self.filename is None:
             w = np.linspace(300, 900, 10000) * u.nm
             t = np.linspace(1, 1, 10000) * u.dimensionless_unscaled
-            thru = SpectralElement.from_spectrum1d(Spectrum1D(spectral_axis=w, flux=t))
+            thru = SpectralElement.from_spectrum1d(Spectrum(spectral_axis=w, flux=t))
         elif self.filename == 'default':
             w = np.linspace(300, 900, 10000) * u.nm
             t = np.linspace(1, .95, 10000) * 0.9 * u.dimensionless_unscaled
-            thru = SpectralElement.from_spectrum1d(Spectrum1D(spectral_axis=w, flux=t))
+            thru = SpectralElement.from_spectrum1d(Spectrum(spectral_axis=w, flux=t))
         else:
             thru = Throughput(self.filename)
         return thru
@@ -78,7 +78,7 @@ class Fiber:
             loss = np.array(file['dbkm'])[::-1] * u.dB / u.km
             t = 10 ** ((self.length * u.cm * loss).decompose().value / 10) * u.dimensionless_unscaled
         
-        return SpectralElement.from_spectrum1d(Spectrum1D(spectral_axis=w, flux=t))
+        return SpectralElement.from_spectrum1d(Spectrum(spectral_axis=w, flux=t))
 
     def attenuate(self, target, aperture=None, fnum=None):
         """
@@ -327,12 +327,13 @@ class Spectrograph:
         """
         return self.grating.beta(self.minimum_wave(), self.m_max)
 
-    def blaze(self, wave):
+    def blaze(self, wave, energy=False):
         """
         :param wave: wavelength
+        :param energy: passing energy if True
         :return: blaze throughput out of 1
         """
-        return self.grating.blaze(self.grating.beta(wave, self.orders[:, None]), self.orders[:, None])
+        return self.grating.blaze(self.grating.beta(wave, self.orders[:, None], energy=energy), self.orders[:, None])
 
     def blaze_plot(self, title='', waves=None, spectrum=None):
         plt.grid()
@@ -628,15 +629,3 @@ class Spectrograph:
         plt.tight_layout()
         plt.show()
 
-
-# misc. debugging variables below
-GRATING_CATALOG = np.loadtxt('../benchdesign/newport_masters.txt', delimiter=',',
-                             dtype=[('name', 'U10'), ('l', 'f4'), ('blaze', 'f4'),
-                                    ('width', 'f4'), ('height', 'f4'), ('stock', 'U10')])
-GRATING_CATALOG['l'] = 1e6/GRATING_CATALOG['l']
-
-NEWPORT_GRATINGS = {x['name']: Grating(
-    0,
-    (x['blaze']*u.deg).to(u.rad).value,
-    0,
-    x['l'] * u.nm) for x in GRATING_CATALOG}
