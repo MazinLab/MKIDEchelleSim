@@ -4,7 +4,7 @@ import pandas as pd
 import sys
 from astropy import units as u
 from astropy.constants import R_sun
-from specutils import Spectrum1D
+from specutils import Spectrum
 from synphot import SpectralElement, SourceSpectrum, units, blackbody
 from synphot.models import Box1D, BlackBody1D, ConstFlux1D, Empirical1D
 import matplotlib.pyplot as plt
@@ -33,11 +33,11 @@ def Throughput(filename):
         w = np.array(file['wavelength'])[::-1] * u.nm
         thru = np.array(file['transmission'])[::-1] * u.dimensionless_unscaled
         thru[thru < 0] = 0
-        thru = Spectrum1D(spectral_axis=w, flux=thru)
+        thru = Spectrum(spectral_axis=w, flux=thru)
 
     elif filename.endswith('.dat'):
         file = np.genfromtxt(filename)
-        thru = Spectrum1D(spectral_axis=file[:, 0] * u.nm, flux=file[:, 1] * u.dimensionless_unscaled)
+        thru = Spectrum(spectral_axis=file[:, 0] * u.nm, flux=file[:, 1] * u.dimensionless_unscaled)
     
     return SpectralElement.from_spectrum1d(thru)
 
@@ -47,7 +47,7 @@ def AtmosphericTransmission():
     :return: atmospheric transmission as SpectralElement object
     """
     x = np.genfromtxt('../momospecsim/simfiles/atmosphere/transmission.dat')
-    spec = Spectrum1D(spectral_axis=x[:, 0] * u.nm, flux=x[:, 1] * u.dimensionless_unscaled)
+    spec = Spectrum(spectral_axis=x[:, 0] * u.nm, flux=x[:, 1] * u.dimensionless_unscaled)
     return SpectralElement.from_spectrum1d(spec)
 
 
@@ -59,7 +59,7 @@ def FridgeTransmission():
     thru = np.array(file['transmission'])[::-1] * u.dimensionless_unscaled
     thru[thru < 0] = 0
     w = np.array(file['wavelength'])[::-1] * u.nm
-    return SpectralElement.from_spectrum1d(Spectrum1D(spectral_axis=w, flux=np.dot(thru, thru)))
+    return SpectralElement.from_spectrum1d(Spectrum(spectral_axis=w, flux=np.dot(thru, thru)))
 
 
 def FineGrid(min, max, npoints=100000):
@@ -71,7 +71,7 @@ def FineGrid(min, max, npoints=100000):
     """
     w = np.linspace(min.to(u.nm).value - 100, max.to(u.nm).value + 100, npoints) * u.nm
     t = np.ones(100000) * u.dimensionless_unscaled
-    return SpectralElement.from_spectrum1d(Spectrum1D(spectral_axis=w, flux=t))
+    return SpectralElement.from_spectrum1d(Spectrum(spectral_axis=w, flux=t))
 
 
 def apply_bandpass(spectra, bandpass):
@@ -104,7 +104,7 @@ def SkyEmission(fov):
     file = np.genfromtxt('../momospecsim/simfiles/sky_emission/radiance.dat')
     w = file[:, 0] * u.nm
     f = file[:, 1] * u.ph / u.s / u.m ** 2 / u.um
-    spec = Spectrum1D(spectral_axis=w, flux=f * fov)
+    spec = Spectrum(spectral_axis=w, flux=f * fov)
     return SourceSpectrum.from_spectrum1d(spec)
 
 
@@ -152,7 +152,7 @@ def FlatModel(minwave, maxwave, flux_level=1e6):
     ratio = 1 if e_sp == 0 else (flux_w / e_sp).decompose()
 
     sp = SourceSpectrum(ConstFlux1D, amplitude=flux_level * u.photlam)
-    return SourceSpectrum.from_spectrum1d(Spectrum1D(flux=sp(waves) * ratio, spectral_axis=waves))
+    return SourceSpectrum.from_spectrum1d(Spectrum(flux=sp(waves) * ratio, spectral_axis=waves))
 
 
 def EmissionModel(filename, minwave, maxwave, target_R=50000):
@@ -198,7 +198,7 @@ def EmissionModel(filename, minwave, maxwave, target_R=50000):
     line_gauss = gauss(wave_grid[None, :].astype(float), wave[:, None].astype(float),
                        uncert[:, None].astype(float) * sigma_factor / 3, flux[:, None].astype(float))
     spectrum = np.sum(line_gauss, axis=1)
-    sp = SourceSpectrum.from_spectrum1d(Spectrum1D(flux=spectrum * u.photlam, spectral_axis=wave_grid * u.nm))
+    sp = SourceSpectrum.from_spectrum1d(Spectrum(flux=spectrum * u.photlam, spectral_axis=wave_grid * u.nm))
 
     # for the typical lab environment
     watt = 3 * u.W  # typical emission lamp wattage
@@ -339,7 +339,7 @@ class Target:
             raise ValueError("spectrum is None, nothing to clip!")
         clip_range = [self.minwave, self.maxwave] if clip_range is None else clip_range
         mask = (self.spectrum.waveset >= clip_range[0]) & (self.spectrum.waveset <= clip_range[-1])
-        self.spectrum = SourceSpectrum.from_spectrum1d(Spectrum1D(
+        self.spectrum = SourceSpectrum.from_spectrum1d(Spectrum(
             spectral_axis=self.spectrum.waveset[mask],
             flux=self.spectrum(self.spectrum.waveset[mask])))
         logger.info(f"Clipped spectrum to{clip_range}.")
@@ -478,5 +478,4 @@ class Target:
         plt.tight_layout()
         plt.legend()
         plt.show()
-        pass
 
