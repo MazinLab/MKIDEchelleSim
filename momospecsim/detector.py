@@ -1,13 +1,26 @@
+from copy import deepcopy
 import numpy as np
 import astropy.units as u
 import logging
+
+import scipy.signal
 from scipy.constants import c
 from astropy.constants import h, c
+from itertools import combinations
+from sklearn.cluster import k_means
+from numpy.polynomial.legendre import Legendre
+import matplotlib.pyplot as plt
+from mpl_point_clicker import clicker
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from lmfit import Parameters, minimize
+import tqdm
+
 from mkidpipeline.photontable import Photontable
 
 from momospecsim.utils.general import sig_to_R, wave_to_energy, energy_to_wave, gauss, gauss_intersect, nearest_idx
 from filterphot import mask_deadtime
 from momospecsim.engine import draw_photons
+from momospecsim.steps.fitmsf import init_params, e0_from_params, cov_from_params, phis_from_grating_eq, fit_func
 
 logger = logging.getLogger('detector')
 
@@ -20,8 +33,11 @@ def sorted_table(table: Photontable, resid_map):
     """
     phases = table.query(column='wavelength')
     resID = table.query(column='resID')
-    idx = [np.where(resID == j) for j in resid_map]
-    return [phases[j].tolist() for j in idx]
+    logger.info('Sorting photon table by pixel...')
+    table = []
+    for j in tqdm.tqdm(resid_map):
+        table.append(phases[np.where(resID == j)])
+    return table
 
 
 def wave_to_phase(waves, minwave, maxwave):
@@ -31,7 +47,7 @@ def wave_to_phase(waves, minwave, maxwave):
     line is from (freq_minw, -0.8) to (freq_maxw, -0.2)
     if -1.1, negative: -1.1+2*max_phase, positive: if 1.1, 1.1+2*min_phase, repeating until between -1 to 1
     linear equation: y = (y2-y1)/(x2-x1)*(x-x1) + y1 = 0.6/(freq_maxw-freq_minw)*(x-freq_minw) - 0.8
-
+    also wraps phase
     :param waves: wavelengths in nm
     :param minwave: minimum wavelength
     :param maxwave: maximum wavelength
@@ -73,7 +89,8 @@ class MKIDDetector:
                  design_R0: float,
                  l0: u.Quantity,
                  randomseed: int,
-                 resid_file: str):
+                 resid_file: str,
+                 fixedR: bool = False):
         """
         Simulation of an MKID detector array
 
@@ -83,6 +100,7 @@ class MKIDDetector:
         :param u.Quantity l0: longest wavelength in spectrometer range in nm
         :param int randomseed: numpy random seed for generating or saving files
         :param str resid_file: resonator ID filename
+        :param bool fixedR: whether to fix exactly (True) or vary randomly (False) the R
         """
         self.npix = npix
         self.pix_size = pix_size * u.um
@@ -91,11 +109,16 @@ class MKIDDetector:
         self.design_R0 = design_R0
         self.pixel_indices = np.arange(self.npix, dtype=int)
         self.randomseed = randomseed
+        self.fixedR = fixedR
         logger.info(f'The random seed is set to {randomseed}.')
 
-        np.random.seed(randomseed)
-        self.R0s = np.random.uniform(low=.85, high=1.15, size=npix) * design_R0
-        logger.info(msg=f'The pixel Rs @ {l0} were randomly generated about {design_R0}.')
+        if fixedR:
+            self.R0s = np.full(shape=self.npix, fill_value=self.design_R0)
+            logger.info(msg=f'The pixel Rs @ {l0} were fixed exactly at {design_R0} for every pixel.')
+        else:
+            np.random.seed(randomseed)
+            self.R0s = np.random.uniform(low=.85, high=1.15, size=npix) * design_R0
+            logger.info(msg=f'The pixel Rs @ {l0} were randomly generated about {design_R0}.')
 
         np.random.seed(randomseed)
         self.phase_offsets = np.random.uniform(low=.8, high=1.2, size=npix)
@@ -200,7 +223,7 @@ class MKIDDetector:
         total_missed = []
 
         # begin deadtime/merging/min. wave processes:
-        for pixel, n in enumerate(pixel_count):
+        for pixel, n in enumerate(tqdm.tqdm(pixel_count)):
             if not n:
                 continue
 
@@ -222,42 +245,59 @@ class MKIDDetector:
                     energies[merge] = np.nan
                     total_merged += energies[merge].size
 
-            measured_energies = energies
-
             # Filter those with too low of energy that won't trigger detection
-            will_trigger = measured_energies > MIN_TRIGGER_ENERGY
+            will_trigger = energies > MIN_TRIGGER_ENERGY
             if not will_trigger.any():
                 continue
-
+            a_times = a_times[will_trigger].value * 1e6  # turn into us
+            dead = DEADTIME.value
             # drop photons that arrive within the deadtime
-            detected = mask_deadtime(a_times[will_trigger], DEADTIME.to(u.s))
+            #detected = mask_deadtime(a_times, DEADTIME)
+            detected = np.ones(len(a_times), bool)
+            i = 0
+            while i < a_times.size:
+                # checks how many elements after arrival time are within deadtime
+                temp = a_times[i+1:] - (a_times[i] + dead)
+                n_dead = (temp < 0).sum()
+                try:
+                    # assigns all elements within deadtime non-detection flag
+                    detected[i+1:i+1+n_dead] = False
+                except ValueError:
+                    continue
+                i += n_dead + 1
 
             # determine all photons missed
             missed = will_trigger.sum() - detected.sum()
             total_missed.append(missed)
 
             # limits wavelengths to saturation wavelength of MKID
-            measured_wavelengths = 1000 / measured_energies[will_trigger][detected]
+            measured_wavelengths = 1000 / energies[will_trigger][detected]
             measured_wavelengths.clip(SATURATION_WAVELENGTH_NM, out=measured_wavelengths)
 
             # add photons to the pot
-            a_times = a_times[will_trigger][detected]
+            a_times = a_times[detected]
             sl = slice(observed, observed + a_times.size)
             photons.wavelength[sl] = measured_wavelengths
-            photons.time[sl] = a_times * 1e6  # in microseconds
+            #photons.time[sl] = a_times * 1e6  # in microseconds
+            photons.time[sl] = a_times
             photons.resID[sl] = self.resid_map[pixel]
             observed += a_times.size
 
         if phase:  # converts wavelengths to MKID response phase
             photons.wavelength = wave_to_phase(photons.wavelength, minwave, maxwave)
-            for j in self.pixel_indices:  # sorting photons by resID (i.e. pixel) and multiplying phase center offsets
+            logger.info('Converting to phase...')
+            for j in tqdm.tqdm(self.pixel_indices):  # sorting photons by resID (i.e. pixel) and multiplying phase center offsets
                 photons.wavelength[np.where(photons.resID == self.resid_map[j])] *= self.phase_offsets[j]
-            if photons.wavelength.size:  # wraps photon phases so they remain between -pi and pi
-                for n, j in enumerate(photons.wavelength):
-                    while photons.wavelength[n] < -1:
-                        photons.wavelength[n] += 2
-                    while photons.wavelength[n] > 1:
-                        photons.wavelength[n] -= 2
+
+            # wraps photon phases so they remain between -pi and pi
+            shape = np.shape(photons.wavelength)
+            phases = np.array(photons.wavelength).flatten()
+            while True:
+                phases[phases < -1] += 2
+                phases[phases > 1] -= 2
+                if (phases < -1).sum() == 0 and (phases < -1).sum() == 0:
+                    break
+            photons.wavelength = np.reshape(phases, shape)
 
         logger.info(f'Completed detector observation sequence.\n'
                      f'Merged: {total_merged}\n'
@@ -267,13 +307,17 @@ class MKIDDetector:
 
 
 class Pixel:
-    def __init__(self, n, resid, photonlist, bin_edges, model_energies):
+    def __init__(self, n, nord, orders, resid, photonlist, bin_edges, bin_centers, model_energies, fine_grid):
         self.n = n
+        self.nord = nord
+        self.orders = orders
         self.resid = resid
         self.photonlist = photonlist
         self.model_energies = model_energies
-        
+        self.bin_edges = bin_edges
+        self.bin_centers = bin_centers
         self.binned_counts = np.histogram(self.photonlist, bins=bin_edges)[0]
+        self.fine_phase_grid = fine_grid
         
         self.leg_s = None
         self.init_params = None
@@ -281,6 +325,7 @@ class Pixel:
         self.redchi2 = None
         self.fit_phi = None
         self.fit_sig = None
+        self.fit_amp = None
         self.gausses = None
         self.gausses_i = None
         self.covariance = None
@@ -294,65 +339,95 @@ class Pixel:
         
         self.all_orders = False
     
-    def cluster(self, nord, bin_centers):
+    def cluster(self):
         save_phi, save_sig, save_amp, residual = [], [], [], []
-        for n_use in range(1, nord + 1):
+        for n_use in range(2, self.nord + 1):
+            
+            # use peaks for initial cluster guess
+            peaks, props = scipy.signal.find_peaks(self.photonlist, height=1)
+            if len(peaks) < n_use:
+                need = n_use - len(peaks)
+                init = np.append(np.argsort(props['peak_heights'])[::-1],[0] * need)
+            else:
+                init = np.argsort(props['peak_heights']).astype(int)[::-1][:n_use]
+            
             # find cluster centers given number of clusters to find
-            center, labels, _ = k_means(self.photonlist.reshape(-1, 1), n_use, random_state=0)
-            init_phi = np.sort(center.flatten())  # sort as clusters are not always in ascending order
+            center, labels, _ = k_means(self.photonlist.reshape(-1, 1), n_use, init=init.reshape(-1, 1))
+            ascend_order = np.argsort(center.flatten())
+            init_phi = list(center.flatten()[ascend_order])  # sort as clusters are not always in ascending order
 
             # find cluster standard devations
             clusters = [self.photonlist[np.argwhere(labels == i).flatten()] for i in range(n_use)]
-            init_sig = [np.std(clusters[i]) for i in range(n_use)]
+            init_sig = list(np.array([np.std(clusters[i]) for i in range(n_use)])[ascend_order])
             
-            init_amp = [self.binned_counts[nearest_idx(bin_centers, init_phi[i])] for i in range(n_use)]
-            gausses = np.sum([gauss(bin_centers, init_phi[i], init_sig[i], init_amp[i])])
-            residual.append((gausses - self.binned_counts) ** 2)
+            init_amp = [self.binned_counts[nearest_idx(self.bin_centers, init_phi[i])] for i in range(n_use)]
+            gausses = np.sum([gauss(self.bin_centers, init_phi[i], init_sig[i], init_amp[i]) for i in range(n_use)], axis=0)
+            gauss_1 = deepcopy(gausses)
+            gauss_1[gauss_1 < 1] = 1
+            residual.append(np.sum((np.divide(self.binned_counts - gausses, np.sqrt(gauss_1)))**2))
+            if self.n == 146:
+                pass
             save_phi.append(init_phi)
             save_sig.append(init_sig)
             save_amp.append(init_amp)
 
         min_idx = np.argmin(residual)
-        fit_later = True if min_idx + 1 != nord else False
+        fit_later = True if min_idx + 2 != self.nord else False
         
         return save_phi[min_idx], save_sig[min_idx], save_amp[min_idx], fit_later
-
     
-    def fit(self, nord, orders, bin_centers, leg_e):
-        cluster_phi, cluster_sig, cluster_amp, fit_later = self.cluster(nord, bin_centers)
+    def fit(self, leg_e, ratio=None):
+        cluster_phi, cluster_sig, cluster_amp, fit_later = self.cluster()
+        
+        if ratio is not None:  # passing amplitude ratio of previous/following pixel triggers seq.
+            max_amp = np.max(cluster_amp)
+            ratio_1 = cluster_amp / max_amp  # amp ratio among current pixel
+            n_missing = self.nord - len(cluster_phi)  # number of orders missing
+            locs = list(combinations(range(self.nord), n_missing))  # all possible order combos
+            corrs = []
+            for loc in locs:
+                ratio_2 = list(deepcopy(ratio_1))
+                for l in loc:
+                    ratio_2.insert(l, 0)
+                corrs.append(np.dot(ratio_2, ratio))  # cross correlate for the best case
+            missing_orders = locs[np.argmax(corrs)]
+            p_poly = np.polynomial.polynomial.Polynomial.fit(np.delete(range(self.nord), missing_orders), cluster_phi, 1)
+            cluster_phi = p_poly(range(self.nord))
+            cluster_amp = [self.binned_counts[nearest_idx(self.bin_centers, phi)] for phi in cluster_phi]
+            fit_later = False
         
         if fit_later:
-            return None  # stop further fitting until all other pixels are finished
+            return  # stop further fitting until all other pixels are finished
 
         self.all_orders = True
         
         self.leg_s = Legendre(coef=(0, 0, 0), domain=[self.model_energies[0] / self.model_energies[-1], 1])  # setup the special sigma Legendre
 
-        cluster_sig = np.average(cluster_sig)
+        cluster_sig = [np.average(cluster_sig)] * self.nord if ratio is not None else cluster_sig
 
-        self.init_params = init_params(phi_guess=cluster_phi, e_guess=self.model_energies, s_guess=[cluster_sig] * nord, a_guess=cluster_amp)
+        self.init_params = init_params(phi_guess=cluster_phi, e_guess=self.model_energies, s_guess=cluster_sig, a_guess=cluster_amp)
         self.opt_params = minimize(fcn=fit_func,  # do nl least squares fitting, return optimized parameter set
                               params=self.init_params,
-                              args=(bin_centers,  # x_phases
+                              args=(self.bin_centers,  # x_phases
                                     self.binned_counts,  # y_counts
-                                    orders,  # orders
+                                    self.orders,  # orders
                                     leg_e,  # energy legendre poly object
                                     self.leg_s))  # sigma legendre poly object
         
         if not self.opt_params.success:  # if unsuccessful, try fitting again with constraints
-            c_params = init_params(phi_guess=cluster_phi, e_guess=self.model_energies, s_guess=[cluster_sig] * nord,
+            c_params = init_params(phi_guess=cluster_phi, e_guess=self.model_energies, s_guess=cluster_sig,
                                    a_guess=cluster_amp, w_constr=True)
             c_opt_params = minimize(fcn=fit_func,
                                     params=c_params,  # params
-                                    args=(bin_centers,  # x_phases
+                                    args=(self.bin_centers,  # x_phases
                                           self.binned_counts,  # y_counts
-                                          orders,  # orders
+                                          self.orders,  # orders
                                           leg_e,  # energy legendre poly object
                                           self.leg_s))  # sigma legendre poly object
 
-        if c_opt_params.redchi < self.opt_params.redchi:  # choose the best set of parameters based on redchi2
-            self.opt_params = c_opt_params
-            self.init_params = c_params
+            if c_opt_params.redchi < self.opt_params.redchi:  # choose the best set of parameters based on redchi2
+                self.opt_params = c_opt_params
+                self.init_params = c_params
 
         plot_int = False
         if not self.opt_params.success:  # log which pixels failed to fit
@@ -360,63 +435,63 @@ class Pixel:
             self.plot_int = True  # overrides plot argument to show any failed fits
         self.redchi2 = self.opt_params.redchi  # save redchi2 to global
 
-        return None
+        return
         
-    def extract_model(self, fine_phase_grid, nord: int, orders, leg_e, degree: int = 2):
+    def extract_model(self, leg_e, degree: int = 2):
         phi_0 = self.opt_params.params['phi_0'].value
-        e_coefs = np.array([self.opt_params.params[f'e{c}'].value for c in range(1, degree + 1)])  # no e0
-        s_coefs = np.array([self.opt_params.params[f's{c}'].value for c in range(degree + 1)])
-        amps = np.array([self.opt_params.params[f'O{i}_amp'].value for i in range(nord)])
-        amps[amps < 1] = 1  # prevents error when finding gaussian intersections
+        e_coef = np.array([self.opt_params.params[f'e{c}'].value for c in range(1, degree + 1)])  # no e0
+        s_coef = np.array([self.opt_params.params[f's{c}'].value for c in range(degree + 1)])
+        self.fit_amp = np.array([self.opt_params.params[f'O{i}_amp'].value for i in range(self.nord)])
+        self.fit_amp[self.fit_amp < 1] = 1  # prevents error when finding gaussian intersections
         
         fit_e0 = e0_from_params(e1=e_coef[0], e2=e_coef[1], phi_0=phi_0)  # get 0th E coef from other params
         setattr(leg_e, 'coef', [fit_e0, e_coef[0], e_coef[1]])  # regenerate the energy legendre poly
         setattr(self.leg_s, 'coef', s_coef)  # regenerate the sigma legendre poly
-        self.fit_phi = phis_from_grating_eq(orders=orders, phi_0=fit_phi0, leg=leg_e,
+        self.fit_phi = phis_from_grating_eq(orders=self.orders, phi_0=phi_0, leg=leg_e,
                                         coefs=[fit_e0, e_coef[0], e_coef[1]])  # get other gaussian means
-        self.fit_sig = self.leg_s(leg_e(fit_phis))  # get all gaussian sigmas
+        self.fit_sig = self.leg_s(leg_e(self.fit_phi))  # get all gaussian sigmas
 
         # store models to array:
-        self.gausses_i = fit_func(params=self.opt_params.params, x_phases=fine_phase_grid, orders=orders,
+        self.gausses_i = fit_func(params=self.opt_params.params, x_phases=self.fine_phase_grid, orders=self.orders,
                                       leg_e=leg_e, leg_s=self.leg_s)  # the individual gaussian models
         self.gausses = np.sum(self.gausses_i, axis=1)  # all gaussians collapsed into one model
 
-    def get_order_edges(self, nord, orders, bin_centers, fine_phase_grid):
-        for i in range(nord - 1):
+    def get_order_edges(self):
+        for i in range(self.nord - 1):
             try:
-                self.order_edges[i + 1] = gauss_intersect(self.fit_phis[[i, i + 1]],
-                                                            self.fit_sigs[[i, i + 1]],
-                                                            self.fit_amps[[i, i + 1]])  # find the virtual pixel boundaries
+                self.order_edges[i + 1] = gauss_intersect(self.fit_phi[[i, i + 1]],
+                                                            self.fit_sig[[i, i + 1]],
+                                                            self.fit_amp[[i, i + 1]])  # find the virtual pixel boundaries
             except ValueError:
                 if i == 0:  # if the 1st order, makes the 1-to-2 border into 3 sigmas away from order 2
-                    self.order_edges[i + 1] = self.fit_phis[i + 1] - self.fit_sigs[i + 1] * 3
-                elif i == nord - 1:  # if the last order, makes the 2ndtolast-to-last border 3 sigs from 2ndtolast
-                    self.order_edges[i + 1] = self.fit_phis[i - 1] + self.fit_sigs[i - 1] * 3
+                    self.order_edges[i + 1] = self.fit_phi[i + 1] - self.fit_sig[i + 1] * 3
+                elif i == self.nord - 1:  # if the last order, makes the 2ndtolast-to-last border 3 sigs from 2ndtolast
+                    self.order_edges[i + 1] = self.fit_phi[i - 1] + self.fit_sig[i - 1] * 3
                 else:  # if the intersection cant be found, manually click the location of the order indicated
                     click_edge = None
                     fig = plt.figure()
                     ax = fig.add_subplot(111)
                     ax.grid()
-                    ax.bar(bin_centers, self.binned_counts, width=bin_centers[1] - bin_centers[0], linewidth=0,
+                    ax.bar(self.bin_centers, self.binned_counts, width=self.bin_centers[1] - self.bin_centers[0], linewidth=0,
                            color='k', label='Data')
-                    ax.plot(fine_phase_grid, self.gausses, label=f'Gaussian Fit')
-                    ax.set_title(f'CLICK THE BOUNDARY BETWEEN ORDER {orders[::-1][i]-1} AND '
-                                 f'{orders[::-1][i]}\n then exit the plot')
+                    ax.plot(self.fine_phase_grid, self.gausses, label=f'Gaussian Fit')
+                    ax.set_title(f'CLICK THE BOUNDARY BETWEEN ORDER {self.orders[::-1][i]-1} AND '
+                                 f'{self.orders[::-1][i]}\n then exit the plot')
                     ax.set_xlabel(r'Phase $\times 2\pi$')
                     ax.set_ylabel('Photon Count')
                     klicker = clicker(ax, ["event"])
                     plt.show()
-                    order_edges[i + 1, p] = klicker.get_positions()['event'][0, 0]
+                    self.order_edges[i + 1, p] = klicker.get_positions()['event'][0, 0]
                     continue
         
-    def order_sort(self, fine_phase_grid):
+    def order_sort(self):
         try:
             # re-histogram the photon table using the virtual pixel edges:
             self.ord_counts, _ = np.histogram(self.photonlist, bins=self.order_edges)
 
             # find order-bleeding covariance:
-            self.covariance = cov_from_params(params=self.opt_params.params, model=self.gausses_i, nord=nord,
-                                                  order_edges=self.order_edges, x_phases=fine_phase_grid)
+            self.covariance = cov_from_params(params=self.opt_params.params, model=self.gausses_i, nord=self.nord,
+                                                  order_edges=self.order_edges, x_phases=self.fine_phase_grid)
 
             cov_inv = np.linalg.inv(self.covariance)  # take the inverse
             self.true_counts = np.dot(self.ord_counts, cov_inv)  # matrix math to retrieve 'true' counts
@@ -424,12 +499,12 @@ class Pixel:
             # obtain the count error on the MSF-specific spectrum:
             self.p_err = [
                 np.sum(self.true_counts * self.covariance[:, m]) - self.true_counts[m] * self.covariance[m, m] for m in
-                range(nord)]
+                range(self.nord)]
             self.m_err = [
                 np.sum(self.true_counts * self.covariance[m]) - self.true_counts[m] * self.covariance[m, m] for m in
-                range(nord)]
+                range(self.nord)]
             if np.abs(np.sum(self.true_counts) - np.sum(self.ord_counts)) > 1:
-                logger.warning(f'Pixel {p} total calculated and actual counts are '
+                logger.warning(f'Pixel {self.n} total calculated and actual counts are '
                                f'{np.abs(np.sum(self.true_counts) - np.sum(self.ord_counts)):.0f} photons apart.')
 
         except ValueError:  # if the solution cannot be found the pixel is rendered inert
@@ -441,7 +516,7 @@ class Pixel:
             self.plot_int = False
             logger.warning(f'Pixel {p} has been discarded.')
 
-    def plot(self, nord, orders, leg_e, bin_centers, fine_phase_grid, debug):
+    def plot(self, leg_e, debug):
         # plot the individual pixels flagged for plotting:
         if self.plot_int or debug:
             fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(14, 8))
@@ -466,26 +541,26 @@ class Pixel:
             ax2.figure.add_axes(ax2_2)
 
             # get the initial guess:
-            pre_gauss = fit_func(self.init_params, fine_phase_grid, orders=orders, leg_e=leg_e, leg_s=self.leg_s,
+            pre_gauss = fit_func(self.init_params, self.fine_phase_grid, orders=self.orders, leg_e=leg_e, leg_s=self.leg_s,
                                  to_sum=True)
 
             # get the initial residuals and weighted reduced chi^2:
-            pre_residual = fit_func(self.init_params, bin_centers, y_counts=self.binned_counts, orders=orders,
+            pre_residual = fit_func(self.init_params, self.bin_centers, y_counts=self.binned_counts, orders=self.orders,
                                     leg_e=leg_e, leg_s=self.leg_s)
             N_dof = len(pre_residual) - self.opt_params.nvarys
             pre_red_chi2 = np.sum(pre_residual ** 2) / N_dof
 
             # get the post-fitting residuals:
-            opt_residual = fit_func(self.opt_params.params, bin_centers, y_counts=self.binned_counts, orders=orders,
+            opt_residual = fit_func(self.opt_params.params, self.bin_centers, y_counts=self.binned_counts, orders=self.orders,
                                     leg_e=leg_e, leg_s=self.leg_s)
 
             # first half of figure with data and models:
             ax1.grid()
-            ax1.bar(bin_centers, self.binned_counts, width=bin_centers[1] - bin_centers[0], linewidth=0, color='k',
+            ax1.bar(self.bin_centers, self.binned_counts, width=self.bin_centers[1] - self.bin_centers[0], linewidth=0, color='k',
                     label='Data')  # plotting the histogram data
-            ax1.plot(fine_phase_grid, pre_gauss, color='gray', label='Init. Guess')  # the initial guess model
+            ax1.plot(self.fine_phase_grid, pre_gauss, color='gray', label='Init. Guess')  # the initial guess model
             for y in self.gausses_i.T:
-                ax1.plot(fine_phase_grid, y, label=f'Order {i}')  # the individual order post-fitting models
+                ax1.plot(self.fine_phase_grid, y, label=f'Order {i}')  # the individual order post-fitting models
             ax1.set_ylabel('Photon Count')
             for b in self.order_edges[:-1]:
                 ax1.axvline(b, linestyle='--', color='black')  # the virtual pixel boundaries
@@ -494,16 +569,16 @@ class Pixel:
             ax1.legend()
 
             res1.grid()
-            for x, y in zip(bin_centers[:-1], pre_residual[:-1]):
+            for x, y in zip(self.bin_centers[:-1], pre_residual[:-1]):
                 res1.plot(x, y, '.r')  # the initial weighted residuals
-            res1.plot(bin_centers[-1], pre_residual[-1], '.r', label=r'Pre Red. $\chi^2=$'f'{pre_red_chi2:.1f}')
+            res1.plot(self.bin_centers[-1], pre_residual[-1], '.r', label=r'Pre Red. $\chi^2=$'f'{pre_red_chi2:.1f}')
             res1.set_ylabel('Weighted Resid.')
             res1.set_xlim([-1.2, 0])
 
             res2.grid()
-            for x, y in zip(bin_centers[:-1], opt_residual[:-1]):
+            for x, y in zip(self.bin_centers[:-1], opt_residual[:-1]):
                 res2.plot(x, y, '.', color='purple')  # the post-fitting weighted residuals
-            res2.plot(bin_centers[-1], opt_residual[-1], label=r'Post Red. $\chi^2=$'f'{self.redchi2:.1f}')
+            res2.plot(self.bin_centers[-1], opt_residual[-1], label=r'Post Red. $\chi^2=$'f'{self.redchi2:.1f}')
             res2.set_ylabel('Weighted Resid.')
             res2.set_xlabel(r'Phase $\times 2\pi$')
             res2.set_xlim([-1.2, 0])
@@ -532,7 +607,7 @@ class Pixel:
             for m, i in enumerate(self.fit_phi):
                 ax2.plot(i, energy_to_wave(leg_e(i) * self.model_energies[-1] * u.eV) - energy_to_wave(
                     e_poly_linear(i) * self.model_energies[-1] * u.eV), '.',
-                         markersize=10, label=f'Order {orders[::-1][m]}')  # plot locations of orders
+                         markersize=10, label=f'Order {self.orders[::-1][m]}')  # plot locations of orders
             ax2.set_ylabel('Fitting Solution Dev. from Linear (nm)')
             ax2.legend()
 
@@ -545,7 +620,7 @@ class Pixel:
             ax2_2.plot(leg_e(new_x), R, color='k')  # plot the R
             for m, i in enumerate(self.fit_phi):
                 ax2_2.plot(leg_e(i), sig_to_R(self.fit_sig[m], leg_e(i)), '.', markersize=10,
-                           label=f'Order {orders[::-1][m]}')  # plot the individual orders
+                           label=f'Order {self.orders[::-1][m]}')  # plot the individual orders
             ax2.set_title(
                 r'$E(\varphi)=$'f'{e_coef[1]:.2e}P_2+{e_coef[0]:.2f}P_1+{fit_e0:.2f}P_0\n'
                 r'$\sigma(E)=$'f'{s_coef[2]:.2e}P_2+{s_coef[1]:.2e}P_1+{s_coef[0]:.2e}P_0'
