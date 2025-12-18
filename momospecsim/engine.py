@@ -2,12 +2,11 @@ import numpy as np
 import scipy.interpolate as interp
 from scipy.signal import oaconvolve
 from scipy.signal.windows import gaussian
-import scipy.ndimage as ndi
-from scipy.constants import h, c
 from scipy.stats import norm
 import astropy.units as u
 import matplotlib.pyplot as plt
 import logging
+import tqdm
 
 u.photlam = u.photon / u.s / u.cm ** 2 / u.AA  # photon flux per wavelength
 SIG2FWHM = 2 * np.sqrt(np.log(2))
@@ -114,7 +113,7 @@ def draw_photons(convol_wave,
     logger.info("Drawing for photon wavelengths (from CDF) and arrival times (from uniform random).")
     # random CDF draw on wavelengths and random uniform draw on times
     l_photons, t_photons = [], []
-    for i, (x, n) in enumerate(zip(cdf.T, N)):
+    for i, (x, n) in enumerate(tqdm.tqdm(zip(cdf.T, N), total=len(N))):
         cdf_interp = interp.interp1d(x, wave_pix[:, i], fill_value=0, bounds_error=False, copy=False)
         np.random.seed(randomseed)
         l_photons.append(cdf_interp(np.random.uniform(0, 1, size=n)) * wave_unit)

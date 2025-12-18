@@ -11,10 +11,10 @@ from astropy.io import fits
 from astropy.table import Table
 import os
 
-from momospecsim.spectrograph import GratingSetup, SpectrographSetup
+from momospecsim.optics import Grating, Spectrograph
 from momospecsim.detector import MKIDDetector, wave_to_phase, sorted_table
 import momospecsim.engine as engine
-from synphot.models import BlackBodyNorm1D, ConstFlux1D
+from synphot.models import BlackBody1D, ConstFlux1D
 from synphot import SourceSpectrum
 from momospecsim.msf import MKIDSpreadFunction
 from mkidpipeline.photontable import Photontable
@@ -174,7 +174,7 @@ if __name__ == '__main__':
     wave = np.linspace(sim.minwave.value - 100, sim.maxwave.value + 100, 10000) * u.nm
     # retrieving the blazed calibration spectrum shape assuming it is known and converting to pixel-space wavelengths:
     if sim.type_spectra == 'blackbody':
-        spectra = SourceSpectrum(BlackBodyNorm1D, temperature=sim.temp)  # flux for star of 1 R_sun at distance of 1 kpc
+        spectra = SourceSpectrum(BlackBody1D, temperature=sim.temp)  # flux for star of 1 R_sun at distance of 1 kpc
     else:
         spectra = SourceSpectrum(ConstFlux1D, amplitude=1)  # only blackbody supported now
     blazed_spectrum, _, _ = eng.blaze(wave, spectra)

@@ -131,6 +131,8 @@ if __name__ == '__main__':
                         help='Random seed for detector reproducibility.')
     parser.add_argument('--resid_file', default='outdir/resids.csv', type=str,
                         help="Filename of the resonator IDs, will be created if it doesn't exist.")
+    parser.add_argument('--fixedR', action='store_true', default=False,
+                        help='True to fix R at the design resolution without randomization for each pixel.')
 
     # get args by importing from arguments file instead:
     parser.add_argument('--args_file', default=None, type=open, action=LoadFromFile,
@@ -188,7 +190,8 @@ if __name__ == '__main__':
                             design_R0=args.R0,
                             l0=args.l0,
                             randomseed=args.randomseed,
-                            resid_file=args.resid_file)
+                            resid_file=args.resid_file,
+                            fixedR=args.fixedR)
     grating = Grating(alpha=args.alpha, delta=args.delta, beta_center=args.beta, groove_length=args.groove_length)
     spectro = Spectrograph(m0=args.m0,
                            m_max=args.m_max,
@@ -269,8 +272,7 @@ if __name__ == '__main__':
                           telescope=telescope,
                           telefiber=telefiber,
                           fiberarray=fiberarray,
-                          spectrograph=spectro,
-                          detector=detector)
+                          spectrograph=spectro)
 
     # saving final photon list to h5 file, store linear phase conversion in header:
     h5_file = f'{args.outdir}/{args.spectype}.h5'
@@ -279,12 +281,13 @@ if __name__ == '__main__':
     if args.plot:
         target.plot_heatmap(detector)
 
-    # buildfromarray(array=target.photonlist, user_h5file=h5_file)
-    # pt = Photontable(file_name=h5_file, mode='write')
-    # pt.update_header(key='sim_settings', value=sim)
-    # pt.disablewrite()  # allows other scripts to open the table
-    # 
-    # logger.info(msg=f'Saved spectrum photon table to {h5_file}.')
+    buildfromarray(array=target.photonlist, user_h5file=h5_file)
+    pt = Photontable(file_name=h5_file, mode='write')
+    pt.update_header(key='sim_settings', value=sim)
+    pt.update_header(key='phase_expression', value='0.6 * (freq_allwave - freq_minw) / (freq_maxw - freq_minw) - 0.8')
+    pt.disablewrite()  # allows other scripts to open the table
+
+    logger.info(msg=f'Saved spectrum photon table to {h5_file}.')
 
     if args.plot:
         target.plot_comparison(spectro, detector, eng, convol_result, blazed_spectrum, reduce_factor, args.exptime)

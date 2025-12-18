@@ -13,7 +13,7 @@ import argparse
 from astropy import units as u
 import scipy.interpolate as interp
 
-from momospecsim.spectrograph import SpectrographSetup
+from momospecsim.optics import Spectrograph
 from momospecsim.spectra import EmissionModel
 
 sys.path.insert(1, '/home/kimc/pycharm/PyReduce/pyreduce')
