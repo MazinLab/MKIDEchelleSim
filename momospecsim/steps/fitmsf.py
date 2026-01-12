@@ -21,7 +21,7 @@ from mkidpipeline.photontable import Photontable
 # local imports
 import momospecsim.engine as engine
 from momospecsim.msf import MKIDSpreadFunction
-from momospecsim.detector import wave_to_phase, phase_to_wave, sorted_table
+#from momospecsim.detector import wave_to_phase, phase_to_wave, sorted_table, Pixel
 import momospecsim.utils.general as gen
 
 """
@@ -313,26 +313,26 @@ def fitmsf(msf_table: Photontable,
     bin_width = bin_width_from_MKID_R(detector.design_R0)
     bin_edges = np.arange(bin_range[0], bin_range[1], bin_width)
     bin_centers = bin_edges[:-1] + np.diff(bin_edges) / 2
-    bin_counts = np.zeros([len(bin_centers), sim.npix])
-    for p in pixels:
-        bin_counts[:, p], _ = np.histogram(photons_pixel[p], bins=bin_edges)
+    # bin_counts = np.zeros([len(bin_centers), sim.npix])
+    # for p in pixels:
+    #     bin_counts[:, p], _ = np.histogram(photons_pixel[p], bins=bin_edges)
     
     # define phase grid for plotting/integrating more accurately
     fine_phase_grid = np.linspace(bin_range[0], bin_range[1], 1000)
  
     # create arrays to place loop values:
-    red_chi2 = np.full(sim.npix, fill_value=1e6)  # reduced chi square
-    all_fit_phi = np.empty([nord, sim.npix])  # fitting result gaussian means
-    all_fit_sig = np.empty([nord, sim.npix])  # fitting result gaussian sigma
-    gausses = np.zeros([1000, sim.npix])  # the entire n_ord Gaussian model summed
-    gausses_i = np.zeros([1000, nord, sim.npix])  # model separated by orders
-    covariance = np.zeros([nord, nord, sim.npix])  # order overlap covariance matrix
-    p_err = np.zeros([nord, sim.npix])  # positive error on counts
-    m_err = np.zeros([nord, sim.npix])  # negative error on counts
-    order_edges = np.zeros([nord + 1, sim.npix])  # virtual pixel bin edges
-    order_edges[0, :] = -2  # make the leftmost bin sufficient for our purposes
-    ord_counts = np.zeros([nord, sim.npix])  # the counts for the MSF specific spectrum by pixel and order
-    true_count = np.zeros([nord, sim.npix])  # storing the MSF spectrum 'true' counts, will not be passed on later
+    # red_chi2 = np.full(sim.npix, fill_value=1e6)  # reduced chi square
+    # all_fit_phi = np.empty([nord, sim.npix])  # fitting result gaussian means
+    # all_fit_sig = np.empty([nord, sim.npix])  # fitting result gaussian sigma
+    # gausses = np.zeros([1000, sim.npix])  # the entire n_ord Gaussian model summed
+    # gausses_i = np.zeros([1000, nord, sim.npix])  # model separated by orders
+    # covariance = np.zeros([nord, nord, sim.npix])  # order overlap covariance matrix
+    # p_err = np.zeros([nord, sim.npix])  # positive error on counts
+    # m_err = np.zeros([nord, sim.npix])  # negative error on counts
+    # order_edges = np.zeros([nord + 1, sim.npix])  # virtual pixel bin edges
+    # order_edges[0, :] = -2  # make the leftmost bin sufficient for our purposes
+    # ord_counts = np.zeros([nord, sim.npix])  # the counts for the MSF specific spectrum by pixel and order
+    # true_count = np.zeros([nord, sim.npix])  # storing the MSF spectrum 'true' counts, will not be passed on later
     
     leg_e = Legendre(coef=(0, 0, 0), domain=[-1,0])  # setup the energy Legendre object
 
@@ -343,8 +343,33 @@ def fitmsf(msf_table: Photontable,
         mo.append(len(m[1]))
     mo = max(mo)
 
+    pixel_dict = {}
     logger.info('Fitting pixel by pixel.')
     for p in tqdm.tqdm(pixels):  # do the non-linear least squares fit for each pixel
+        pixel_dict.update({f"{p}": Pixel(p, nord, resid_map[p], photons_pixel[p], bin_edges, pix_E[:, p])})
+        _ = pixel_dict[f"{p}"].fit(nord, spectro.orders, bin_centers, leg_e)
+        if pixel_dict[f"{p}"].all_orders:
+            pixel_dict[f"{p}"].extract_model(fine_phase_grid, nord, spectro.orders, leg_e)
+        
+    # use adjacent pixels to fit pixels with missing orders, starting from the middle
+    for p in tqdm.tqdm(pixels[int(np.round(detector.npix/2)):]):
+        if not pixel_dict[f"{p}"].all_orders and pixel_dict[f"{p - 1}"].all_orders:
+            # get the ratio of the order amplitudes wrt largest
+            max_amp = np.max(pixel_dict[f"{p - 1}"].fit_amp)
+            ratio = pixel_dict[f"{p}"].fit_amp / max_amp
+            _ = pixel_dict[f"{p}"].fit(nord, spectro.orders, bin_centers, leg_e, ratio)
+
+    for p in tqdm.tqdm(pixels[:int(np.round(detector.npix / 2))]):
+        if not pixel_dict[f"{p}"].all_orders and pixel_dict[f"{p + 1}"].all_orders:
+            # get the ratio of the order amplitudes wrt largest
+            max_amp = np.max(pixel_dict[f"{p + 1}"].fit_amp)
+            ratio = pixel_dict[f"{p}"].fit_amp / max_amp
+            _ = pixel_dict[f"{p}"].fit(nord, spectro.orders, bin_centers, leg_e, ratio)
+
+        pixel_dict[f"{p}"].get_order_edges(nord, spectro.orders, bin_centers, fine_phase_grid)
+        pixel_dict[f"{p}"].order_sort(fine_phase_grid)
+        pixel_dict[f"{p}"].plot(nord, spectro.orders, leg_e, bin_centers, fine_phase_grid, debug)
+        
         leg_s = Legendre(coef=(0, 0, 0), domain=[pix_E[0, p] / pix_E[-1, p], 1])  # setup the special sigma Legendre
 
         n_redchis, n_params = [], []  # temporary storage for holding possible cases
@@ -364,6 +389,9 @@ def fitmsf(msf_table: Photontable,
                         # use polyfit to insert the missing cluster centers into the list found earlier
                         p_poly = np.polynomial.polynomial.Polynomial.fit(np.delete(range(nord), mos), phi_init, 1)
                         phi_init = p_poly(range(nord))
+
+            # TODO try 1 to N clusters, put into rough Gaussians, take residual and set aside if
+            # missing orders is better than all orders, use adjacent fits later to fill in the gaps
 
             # find the amplitudes (counts) of the data at those cluster centers:
             amp_init = bin_counts[[gen.nearest_idx(bin_centers, phi) for phi in phi_init], p]
