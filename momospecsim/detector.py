@@ -344,7 +344,7 @@ class Pixel:
         for n_use in range(2, self.nord + 1):
             
             # use peaks for initial cluster guess
-            peaks, props = scipy.signal.find_peaks(self.photonlist, height=1)
+            peaks, props = scipy.signal.find_peaks(self.binned_counts, height=5, distance=6)
             if len(peaks) < n_use:
                 need = n_use - len(peaks)
                 init = np.append(np.argsort(props['peak_heights'])[::-1],[0] * need)
@@ -352,20 +352,22 @@ class Pixel:
                 init = np.argsort(props['peak_heights']).astype(int)[::-1][:n_use]
             
             # find cluster centers given number of clusters to find
-            center, labels, _ = k_means(self.photonlist.reshape(-1, 1), n_use, init=init.reshape(-1, 1))
+            center, labels, _ = k_means(self.photonlist.reshape(-1, 1), n_use, init=self.bin_centers[peaks[init]].reshape(-1, 1))
             ascend_order = np.argsort(center.flatten())
-            init_phi = list(center.flatten()[ascend_order])  # sort as clusters are not always in ascending order
+            init_phi = center.flatten()[ascend_order]  # sort as clusters are not always in ascending order
 
             # find cluster standard devations
             clusters = [self.photonlist[np.argwhere(labels == i).flatten()] for i in range(n_use)]
-            init_sig = list(np.array([np.std(clusters[i]) for i in range(n_use)])[ascend_order])
+            init_sig = np.array([np.std(clusters[i]) for i in range(n_use)])[ascend_order]
             
-            init_amp = [self.binned_counts[nearest_idx(self.bin_centers, init_phi[i])] for i in range(n_use)]
+            init_amp = np.array([self.binned_counts[nearest_idx(self.bin_centers, init_phi[i])] for i in range(n_use)])
+            init_amp[init_amp < 10] = 100
+            init_sig[init_sig == 0] = np.average(init_sig)
             gausses = np.sum([gauss(self.bin_centers, init_phi[i], init_sig[i], init_amp[i]) for i in range(n_use)], axis=0)
             gauss_1 = deepcopy(gausses)
             gauss_1[gauss_1 < 1] = 1
             residual.append(np.sum((np.divide(self.binned_counts - gausses, np.sqrt(gauss_1)))**2))
-            if self.n == 146:
+            if self.n == 1413:
                 pass
             save_phi.append(init_phi)
             save_sig.append(init_sig)
@@ -380,7 +382,7 @@ class Pixel:
         cluster_phi, cluster_sig, cluster_amp, fit_later = self.cluster()
         
         if ratio is not None:  # passing amplitude ratio of previous/following pixel triggers seq.
-            max_amp = np.max(cluster_amp)
+            max_amp = cluster_amp.max()
             ratio_1 = cluster_amp / max_amp  # amp ratio among current pixel
             n_missing = self.nord - len(cluster_phi)  # number of orders missing
             locs = list(combinations(range(self.nord), n_missing))  # all possible order combos
@@ -403,7 +405,7 @@ class Pixel:
         
         self.leg_s = Legendre(coef=(0, 0, 0), domain=[self.model_energies[0] / self.model_energies[-1], 1])  # setup the special sigma Legendre
 
-        cluster_sig = [np.average(cluster_sig)] * self.nord if ratio is not None else cluster_sig
+        cluster_sig = np.array([np.average(cluster_sig)] * self.nord) if ratio is not None else cluster_sig
 
         self.init_params = init_params(phi_guess=cluster_phi, e_guess=self.model_energies, s_guess=cluster_sig, a_guess=cluster_amp)
         self.opt_params = minimize(fcn=fit_func,  # do nl least squares fitting, return optimized parameter set
@@ -413,7 +415,7 @@ class Pixel:
                                     self.orders,  # orders
                                     leg_e,  # energy legendre poly object
                                     self.leg_s))  # sigma legendre poly object
-        
+
         if not self.opt_params.success:  # if unsuccessful, try fitting again with constraints
             c_params = init_params(phi_guess=cluster_phi, e_guess=self.model_energies, s_guess=cluster_sig,
                                    a_guess=cluster_amp, w_constr=True)
@@ -482,7 +484,6 @@ class Pixel:
                     klicker = clicker(ax, ["event"])
                     plt.show()
                     self.order_edges[i + 1, p] = klicker.get_positions()['event'][0, 0]
-                    continue
         
     def order_sort(self):
         try:
@@ -559,12 +560,12 @@ class Pixel:
             ax1.bar(self.bin_centers, self.binned_counts, width=self.bin_centers[1] - self.bin_centers[0], linewidth=0, color='k',
                     label='Data')  # plotting the histogram data
             ax1.plot(self.fine_phase_grid, pre_gauss, color='gray', label='Init. Guess')  # the initial guess model
-            for y in self.gausses_i.T:
+            for i, y in zip(self.orders[::-1], self.gausses_i.T):
                 ax1.plot(self.fine_phase_grid, y, label=f'Order {i}')  # the individual order post-fitting models
             ax1.set_ylabel('Photon Count')
-            for b in self.order_edges[:-1]:
-                ax1.axvline(b, linestyle='--', color='black')  # the virtual pixel boundaries
-            ax1.axvline(self.order_edges[-1], linestyle='--', color='black', label='Order Edges')
+            #for b in self.order_edges[:-1]:
+            #    ax1.axvline(b, linestyle='--', color='black')  # the virtual pixel boundaries
+            #ax1.axvline(self.order_edges[-1], linestyle='--', color='black', label='Order Edges')
             ax1.set_xlim([-1.2, 0])
             ax1.legend()
 
@@ -582,8 +583,8 @@ class Pixel:
             res2.set_ylabel('Weighted Resid.')
             res2.set_xlabel(r'Phase $\times 2\pi$')
             res2.set_xlim([-1.2, 0])
-            for b in self.order_edges:
-                res2.axvline(b, linestyle='--', color='black')  # adding in the virtual pixel boundaries
+            #for b in self.order_edges:
+            #    res2.axvline(b, linestyle='--', color='black')  # adding in the virtual pixel boundaries
 
             # second figure with fitting result polynomials:
             if not np.isnan(self.fit_phi[0]) and not np.isnan(self.fit_phi[-1]):  # changing plot range in case orders missing
@@ -602,6 +603,9 @@ class Pixel:
             masked_lin = energy_to_wave(e_poly_linear(new_x) * self.model_energies[-1] * u.eV)  # calc the linear legendre
             deviation = masked_reg - masked_lin  # take the difference
 
+            e_coef = np.array([self.opt_params.params[f'e{c}'].value for c in range(1, 3)])  # no e0
+            s_coef = np.array([self.opt_params.params[f's{c}'].value for c in range(3)])
+
             ax2.grid()
             ax2.plot(new_x, deviation, color='k')  # plotting difference
             for m, i in enumerate(self.fit_phi):
@@ -615,16 +619,16 @@ class Pixel:
             ax2_2.set_ylabel('R')
             ax2_2.set_xlabel(r'Energy (eV)')
             ax2_2.invert_xaxis()
-            s_eval = leg_s(leg_e(new_x))  # retrieve sigmas from solution
+            s_eval = self.leg_s(leg_e(new_x))  # retrieve sigmas from solution
             R = sig_to_R(s_eval, leg_e(new_x))  # convert to spectral res.
             ax2_2.plot(leg_e(new_x), R, color='k')  # plot the R
             for m, i in enumerate(self.fit_phi):
                 ax2_2.plot(leg_e(i), sig_to_R(self.fit_sig[m], leg_e(i)), '.', markersize=10,
                            label=f'Order {self.orders[::-1][m]}')  # plot the individual orders
-            ax2.set_title(
-                r'$E(\varphi)=$'f'{e_coef[1]:.2e}P_2+{e_coef[0]:.2f}P_1+{fit_e0:.2f}P_0\n'
-                r'$\sigma(E)=$'f'{s_coef[2]:.2e}P_2+{s_coef[1]:.2e}P_1+{s_coef[0]:.2e}P_0'
-            )  # print the 2 solution functions
+            #ax2.set_title(
+           #     r'$E(\varphi)=$'f'{e_coef[1]:.2e}P_2+{e_coef[0]:.2f}P_1+{fit_e0:.2f}P_0\n'
+            #    r'$\sigma(E)=$'f'{s_coef[2]:.2e}P_2+{s_coef[1]:.2e}P_1+{s_coef[0]:.2e}P_0'
+            #)  # print the 2 solution functions
 
             ax1.set_xticks([])  # removes axis labels
             ax2.set_xticks([])
