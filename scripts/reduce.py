@@ -2,20 +2,25 @@
 import numpy as np
 import astropy.units as u
 import time
+import warnings
 from datetime import datetime as dt
 import argparse
 import logging
 import os
+import tqdm
+from numpy.polynomial.legendre import Legendre
+
 from mkidpipeline.photontable import Photontable
 
 # local imports
-from momospecsim.steps.fitmsf import fitmsf
+from momospecsim.steps.fitmsf import fitmsf, bin_width_from_MKID_R
 from momospecsim.steps.ordersort import ordersort
 from momospecsim.steps.wavecal import wavecal
 from momospecsim.steps.extract import extract
 from momospecsim.simsettings import SpecSimSettings
 from momospecsim.msf import MKIDSpreadFunction
-from momospecsim.utils.general import LoadFromFile
+import momospecsim.utils.general as gen
+from momospecsim.detector import wave_to_phase, phase_to_wave, sorted_table, Pixel
 
 
 if __name__ == "__main__":
@@ -43,6 +48,7 @@ if __name__ == "__main__":
                              'e.g.: 0 999 13 1000 1999 25 2000 2047 4'
                              'will become [0, 999, 13,  1000, 1999, 25,  2000, 2047, 4]'
                              'where       sta sto  ord   sta  sto  ord   sta   sto  ord')
+    # TODO: eradicate missing order pix for neighboring pixel knowledge
 
     # optional wavecal args:
     parser.add_argument('--wavecal', default='outdir/emission.h5',
@@ -73,7 +79,7 @@ if __name__ == "__main__":
                              'Pass any other argument, such as "False", to disable this step.')
     
     # get optional args by importing from arguments file:
-    parser.add_argument('--args_file', default=None, type=open, action=LoadFromFile,
+    parser.add_argument('--args_file', default=None, type=open, action=gen.LoadFromFile,
                         help='.txt file with arguments written exactly as they would be in the command line.'
                              'Pass only this argument if being used. See "mkidspec_args.txt" for example.')
 
@@ -84,8 +90,10 @@ if __name__ == "__main__":
     # ==================================================================================================================
     # START LOGGING
     # ==================================================================================================================
-    logger = logging.getLogger('mkidspec')
+    logger = logging.getLogger('reduce')
     logging.basicConfig(level=logging.INFO)
+    logger.info(msg=f"An MKID spectrometer observation is being reduced."
+                    f"\nThe date and time are: {dt.now().strftime('%Y-%m-%d %H:%M:%S')}.")
 
     # ==================================================================================================================
     # PARSE STEPS TO RUN
@@ -95,8 +103,72 @@ if __name__ == "__main__":
     # MSF
     if args.msf.lower().endswith('.h5'):  # the MSF has yet to be fit
         msf_table = Photontable(file_name=args.msf)
-        steps.append('msf')
         sim = msf_table.query_header('sim_settings')
+
+        # extract resid map from file:
+        resid_map = np.loadtxt(fname=sim.resid_file, delimiter=',')
+        photons_pixel = sorted_table(table=msf_table, resid_map=resid_map)  # get list of photons in each pixel
+        logger.info('Unwrapping photon phases.')
+        for l in photons_pixel:
+            l[l > 0] -= 2
+
+        # retrieve the detector, spectrograph, and engine:
+        eng = sim.engine
+        spectro = eng.spectrograph
+        detector = spectro.detector
+
+        # shortening some longer variable names:
+        nord = spectro.nord
+        pixels = detector.pixel_indices
+        pix_waves = spectro.pixel_wavelengths().to(u.nm)[::-1]  # flip order axis to be in ascending phase/lambda
+        pix_E = gen.wave_to_energy(pix_waves).value  # convert to energy
+
+        # pre-bin each pixel with the same bin edges and get centers for plotting:
+        bin_width = bin_width_from_MKID_R(detector.design_R0)
+        bin_edges = np.arange(args.bin_range[0], args.bin_range[1], bin_width)
+        bin_centers = bin_edges[:-1] + np.diff(bin_edges) / 2
+
+        # define phase grid for plotting/integrating more accurately
+        fine_phase_grid = np.linspace(args.bin_range[0], args.bin_range[1], 1000)
+
+        leg_e = Legendre(coef=(0, 0, 0), domain=[-1, 0])  # setup the energy Legendre object
+
+        warnings.filterwarnings('ignore', category=RuntimeWarning)  # suppresses warning that occurs each fit
+
+        pixel_dict = {}
+        logger.info('Fitting pixel by pixel.')
+        for p in tqdm.tqdm(range(int(len(pixels)/2)-1, len(pixels)-1)):  # do the non-linear least squares fit for each pixel
+            pixel_dict.update({f"{p}": Pixel(p, nord, spectro.orders, resid_map[p], photons_pixel[p], bin_edges, bin_centers, pix_E[:, p], fine_phase_grid)})
+            pixel_dict[f"{p}"].fit(leg_e)
+            
+            if pixel_dict[f"{p}"].all_orders:
+                pixel_dict[f"{p}"].extract_model(leg_e)
+                
+            # use adjacent pixels to fit pixels with missing orders, starting from the middle
+            elif pixel_dict[f"{p - 1}"].all_orders:
+                # get the ratio of the order amplitudes wrt largest
+                max_amp = np.max(pixel_dict[f"{p - 1}"].fit_amp)
+                ratio = pixel_dict[f"{p - 1}"].fit_amp / max_amp
+                pixel_dict[f"{p}"].fit(leg_e, ratio)
+
+            pixel_dict[f"{p}"].extract_model(leg_e)
+            pixel_dict[f"{p}"].get_order_edges()
+            pixel_dict[f"{p}"].order_sort()
+            pixel_dict[f"{p}"].plot(leg_e, args.debug)
+
+        for p in tqdm.tqdm(range(len(pixels)-1, int(len(pixels)/2)-1, -1)):
+            if not pixel_dict[f"{p}"].all_orders and pixel_dict[f"{p + 1}"].all_orders:
+                # get the ratio of the order amplitudes wrt largest
+                max_amp = np.max(pixel_dict[f"{p + 1}"].fit_amp)
+                ratio = pixel_dict[f"{p + 1}"].fit_amp / max_amp
+                pixel_dict[f"{p}"].fit(leg_e, ratio)
+                pixel_dict[f"{p}"].extract_model(leg_e)
+                pixel_dict[f"{p}"].get_order_edges()
+                pixel_dict[f"{p}"].order_sort()
+                pixel_dict[f"{p}"].plot(leg_e, args.debug)
+
+        msf_obj = pixeldict_to_msf(pixel_dict)
+
     elif args.msf.lower().endswith('.pkl'):  # the MSF file already exists
         msf_obj = MKIDSpreadFunction(filename=args.msf)
         sim = msf_obj.sim_settings
@@ -139,7 +211,7 @@ if __name__ == "__main__":
         missing_order_pix = np.reshape(list(map(int, args.missing_order_pix)), (-1, 3))
         missing_order_pix = [[(missing_order_pix[i, 0], missing_order_pix[i, 1]),
               [int(o)-1 for o in str(missing_order_pix[i, 2])]] for i in range(missing_order_pix.shape[0])]
-        
+
         # obtain the MKID Spread Function
         msf_obj = fitmsf(msf_table=msf_table,
                          sim=sim,
@@ -149,6 +221,7 @@ if __name__ == "__main__":
                          missing_order_pix=missing_order_pix,
                          plot=plot,
                          debug=args.debug)
+
     if 'wt_sort' in steps:
         # bin the wavecal table
         wavecal_fits = ordersort(table=wavecal_table,
