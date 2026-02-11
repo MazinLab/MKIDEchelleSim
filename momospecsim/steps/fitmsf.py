@@ -19,22 +19,9 @@ from lmfit import Parameters, minimize
 from mkidpipeline.photontable import Photontable
 
 # local imports
-import momospecsim.engine as engine
 from momospecsim.msf import MKIDSpreadFunction
-#from momospecsim.detector import wave_to_phase, phase_to_wave, sorted_table, Pixel
 import momospecsim.utils.general as gen
 
-"""
-Obtain the MKID Spread Function (MSF) from a calibration (flat-field or known-temperature blackbody) spectrum.
-The steps are:
--Load the calibration photon table.
--Fit model function to each pixel.
--Use Gaussian function intersections to obtain virtual pixel bin edges for each order.
--Calculate fractional bleed between orders and converts them into an n_ord x n_ord "covariance" matrix for each
- pixel. This matrix how much of each order's flux was potentially grouped into another order.
- This will later be used to determine the error on the follow-on extracted spectra.
--Saves newly obtained bin edges and covariance matrices to files.
-"""
 
 logger = logging.getLogger('fitmsf')
 
@@ -63,37 +50,37 @@ def init_params(phi_guess, e_guess, s_guess, a_guess, e_domain=[-1, 0], w_constr
 
     # use Legendre polyfitting on the theoretical/peak-finding data to get guess coefs
     e_coefs = Legendre.fit(x=phi_guess, y=e_guess / e_guess[-1], deg=2, domain=e_domain).coef
-    s_coefs = Legendre.fit(x=e_guess / e_guess[-1], y=s_guess, deg=2, domain=[e_guess[0] / e_guess[-1], 1]).coef
-    # the domain of the sigmas is scaled such that the order_0 energy is = to 1
+    s_coefs = Legendre.fit(x=e_guess / e_guess[-1], y=s_guess, deg=2, domain=[e_guess[0] / e_guess[-1] - 0.5, 1.5]).coef
+    # the domain is the range of values to fit for (may want other phases so -1 to 0)
+    # the window is what values to map to in the Legendre poly (ALWAYS keep -1, 1)
 
     if w_constr:
         # add energy coefs to params object:
-        parameters.add(name=f'e1', value=e_coefs[1], max=0)  # must be negative
-        parameters.add(name=f'e2', value=e_coefs[2], min=-0.1, max=0.1)
+        parameters.add(name='e1', value=e_coefs[1], max=0)  # must be negative
+        parameters.add(name='e2', value=e_coefs[2], min=-0.5, max=0.5)
 
         # add the sigma coefs to params object:
-        parameters.add(name=f's0', value=s_coefs[0], min=0, max=0.1)  # must be positive
-        parameters.add(name=f's1', value=s_coefs[1])
-        parameters.add(name=f's2', value=s_coefs[2], min=-1e-2, max=1e-2)
+        parameters.add(name='s0', value=s_coefs[0], min=0, max=0.1)  # must be positive
+        parameters.add(name='s1', value=s_coefs[1])
+        parameters.add(name='s2', value=s_coefs[2], min=-1e-2, max=1e-2)
 
         # add phi_0s to params object:
-        parameters.add(name=f'phi_0', value=phi_guess[-1], min=phi_guess[-1] - 0.2, max=phi_guess[-1] + 0.2)
-
+        parameters.add(name='phi_0', value=phi_guess[-1], min=phi_guess[-1]-0.1, max=phi_guess[-1] + 0.1)
         # add amplitudes to params object:
         for n, a in enumerate(a_guess):
-            parameters.add(name=f'O{n}_amp', value=a, min=0, max=np.max(a_guess)*10)
+            parameters.add(name=f'O{n}_amp', value=a, min=1, max=np.max(a_guess)*1.2)
     else:
         # add energy coefs to params object:
-        parameters.add(name=f'e1', value=e_coefs[1])
-        parameters.add(name=f'e2', value=e_coefs[2])
+        parameters.add(name='e1', value=e_coefs[1])
+        parameters.add(name='e2', value=e_coefs[2])
     
         # add the sigma coefs to params object:
-        parameters.add(name=f's0', value=s_coefs[0])
-        parameters.add(name=f's1', value=s_coefs[1])
-        parameters.add(name=f's2', value=s_coefs[2])
+        parameters.add(name='s0', value=s_coefs[0])
+        parameters.add(name='s1', value=s_coefs[1])
+        parameters.add(name='s2', value=s_coefs[2])
     
         # add phi_0s to params object:
-        parameters.add(name=f'phi_0', value=phi_guess[-1])
+        parameters.add(name='phi_0', value=phi_guess[-1])
     
         # add amplitudes to params object:
         for n, a in enumerate(a_guess):
@@ -119,8 +106,10 @@ def fit_func(params: Parameters, x_phases, y_counts=None, orders=None, leg_e=Non
     # turn dictionary of param values into separate variables
     e1, e2, s0, s1, s2, phi_0, *amps = tuple(params.valuesdict().values())
 
+    e_coef_convert = Legendre(coef=(0, e1, e2), domain=[-1, 0]).convert().coef
     # obtain the 0th order energy coef
-    e0 = e0_from_params(e1, e2, phi_0)
+    e0_convert = e0_from_params(e_coef_convert[1], e_coef_convert[2], phi_0)
+    e0 = Legendre(coef=(e0_convert, e_coef_convert[1], e_coef_convert[2])).convert(domain=[-1, 0]).coef[0]
 
     # pass coef parameters to polys:
     setattr(leg_e, 'coef', (e0, e1, e2))
@@ -128,7 +117,10 @@ def fit_func(params: Parameters, x_phases, y_counts=None, orders=None, leg_e=Non
 
     try:
         # calculate the other phi_m based on phi_0:
-        phis = phis_from_grating_eq(orders, phi_0, leg=leg_e, coefs=[e0, e1, e2])
+        phis = phis_from_grating_eq(orders, phi_0, leg=leg_e,
+                                    coefs=[e0_convert,
+                                           e_coef_convert[1],
+                                           e_coef_convert[2]])
 
         # get sigmas at each phase center:
         sigs = leg_s(leg_e(phis))
@@ -139,9 +131,9 @@ def fit_func(params: Parameters, x_phases, y_counts=None, orders=None, leg_e=Non
         model = np.sum(gauss_i, axis=1).flatten()
 
         if y_counts is not None:
-            if np.iscomplex(phis).any() or not np.isfinite(phis).any():  # return super high residual for such cases
+            if np.iscomplex(phis).any() or not np.isfinite(phis).any() or (np.sort(phis) != phis).any():  # return super high residual for such cases
                 residual = np.full(y_counts.shape, np.max(y_counts)/np.sqrt(np.max(y_counts)))
-
+            
             else:
                 # get the residuals and weighted reduced chi^2:
                 model_1 = deepcopy(model)
@@ -211,7 +203,7 @@ def e0_from_params(e1: float, e2: float, phi_0: float):
     :param float phi_0: the initial order phase center
     :return: the Legendre poly solved for the 0th order coef given dimensionless energy
     """
-    return 1 - e2 * (1 / 2 * (3 * ((phi_0 + 0.5) * 2) ** 2 - 1)) - e1 * 2 * (phi_0 + 0.5)
+    return 1 - e2 * (1 / 2 * (3 * phi_0 ** 2 - 1)) - e1 * phi_0
 
 
 def phis_from_grating_eq(orders, phi_0: float, leg: Legendre, coefs=None):
@@ -223,17 +215,21 @@ def phis_from_grating_eq(orders, phi_0: float, leg: Legendre, coefs=None):
     :return: the phase centers of the other orders constrained by the grating equation
     """
     grating_eq = orders[1:][::-1] / orders[0] * leg(phi_0)
+    # leg(phi_0) should = 1 since E_0 was divided out
 
     phis = []
     for i in grating_eq:
-        roots = np.roots([6 * coefs[2], 6 * coefs[2] + 2 * coefs[1], coefs[2] + coefs[0] + coefs[1] - i])
+        roots = np.roots([3 / 2 * coefs[2], coefs[1], coefs[0] - coefs[2] / 2 - i])
 
         if len(roots) == 1:  # when there is only 1 root, use it
             phis.append(roots[0])
         elif ~np.isfinite(roots).all():  # if both roots are invalid, raise error
-            raise ValueError("All calculated roots are not valid, check equation.")
+            phis.append(i)  # something to cause residual to be large
         else:  # if there are 2 valid roots, use the one in the proper range
-            phis.append(roots[(-1.5 < roots) & (roots < phi_0)][0])
+            try:
+                phis.append(roots[(-1.5 < roots) & (roots < phi_0)].max())
+            except IndexError:
+                phis.append(i)
 
     return np.append(np.array(phis), phi_0)
 

@@ -350,9 +350,10 @@ class Pixel:
                 init = np.append(np.argsort(props['peak_heights'])[::-1],[0] * need)
             else:
                 init = np.argsort(props['peak_heights']).astype(int)[::-1][:n_use]
+            init = self.bin_centers[peaks[init]].reshape(-1, 1)
             
             # find cluster centers given number of clusters to find
-            center, labels, _ = k_means(self.photonlist.reshape(-1, 1), n_use, init=self.bin_centers[peaks[init]].reshape(-1, 1))
+            center, labels, _ = k_means(self.photonlist.reshape(-1, 1), n_use, init=init)
             ascend_order = np.argsort(center.flatten())
             init_phi = center.flatten()[ascend_order]  # sort as clusters are not always in ascending order
 
@@ -367,14 +368,24 @@ class Pixel:
             gauss_1 = deepcopy(gausses)
             gauss_1[gauss_1 < 1] = 1
             residual.append(np.sum((np.divide(self.binned_counts - gausses, np.sqrt(gauss_1)))**2))
-            if self.n == 1413:
+            if self.n == 1467:
                 pass
             save_phi.append(init_phi)
             save_sig.append(init_sig)
             save_amp.append(init_amp)
+            
+            init_amp_p = np.array([self.binned_counts[nearest_idx(self.bin_centers, init.flatten()[i])] for i in range(n_use)])
+            init_amp_p[init_amp_p < 10] = 100
+            gausses_p = np.sum([gauss(self.bin_centers, init.flatten()[i], init_sig[i], init_amp[i]) for i in range(n_use)], axis=0)
+            gauss_1p = deepcopy(gausses)
+            gauss_1p[gauss_1p < 1] = 1
+            residual.append(np.sum((np.divide(self.binned_counts - gausses_p, np.sqrt(gauss_1p)))**2))
+            save_phi.append(init.flatten())
+            save_sig.append(init_sig)
+            save_amp.append(init_amp_p)
 
         min_idx = np.argmin(residual)
-        fit_later = True if min_idx + 2 != self.nord else False
+        fit_later = True if len(save_phi[min_idx]) < self.nord else False
         
         return save_phi[min_idx], save_sig[min_idx], save_amp[min_idx], fit_later
     
@@ -403,7 +414,7 @@ class Pixel:
 
         self.all_orders = True
         
-        self.leg_s = Legendre(coef=(0, 0, 0), domain=[self.model_energies[0] / self.model_energies[-1], 1])  # setup the special sigma Legendre
+        self.leg_s = Legendre(coef=(0, 0, 0), domain=[self.model_energies[0] / self.model_energies[-1] + 0.5, 0.5])  # setup the special sigma Legendre
 
         cluster_sig = np.array([np.average(cluster_sig)] * self.nord) if ratio is not None else cluster_sig
 
@@ -416,7 +427,7 @@ class Pixel:
                                     leg_e,  # energy legendre poly object
                                     self.leg_s))  # sigma legendre poly object
 
-        if not self.opt_params.success:  # if unsuccessful, try fitting again with constraints
+        if not self.opt_params.success or self.opt_params.redchi > 10:  # if unsuccessful, try fitting again with constraints
             c_params = init_params(phi_guess=cluster_phi, e_guess=self.model_energies, s_guess=cluster_sig,
                                    a_guess=cluster_amp, w_constr=True)
             c_opt_params = minimize(fcn=fit_func,
@@ -446,11 +457,14 @@ class Pixel:
         self.fit_amp = np.array([self.opt_params.params[f'O{i}_amp'].value for i in range(self.nord)])
         self.fit_amp[self.fit_amp < 1] = 1  # prevents error when finding gaussian intersections
         
-        fit_e0 = e0_from_params(e1=e_coef[0], e2=e_coef[1], phi_0=phi_0)  # get 0th E coef from other params
+        e_coef_convert = Legendre([0, e_coef[0], e_coef[1]], domain=[-1, 0]).convert().coef
+        fit_e0_convert = e0_from_params(e1=e_coef_convert[1], e2=e_coef_convert[2], phi_0=phi_0)  # get 0th E coef from other params
+        fit_e0 = Legendre([fit_e0_convert, e_coef_convert[1], e_coef_convert[2]]).convert(domain=[-1,0]).coef[0]
+        
         setattr(leg_e, 'coef', [fit_e0, e_coef[0], e_coef[1]])  # regenerate the energy legendre poly
         setattr(self.leg_s, 'coef', s_coef)  # regenerate the sigma legendre poly
         self.fit_phi = phis_from_grating_eq(orders=self.orders, phi_0=phi_0, leg=leg_e,
-                                        coefs=[fit_e0, e_coef[0], e_coef[1]])  # get other gaussian means
+                                        coefs=[fit_e0_convert, e_coef_convert[1], e_coef_convert[2]])  # get other gaussian means
         self.fit_sig = self.leg_s(leg_e(self.fit_phi))  # get all gaussian sigmas
 
         # store models to array:
@@ -476,12 +490,14 @@ class Pixel:
                     ax.grid()
                     ax.bar(self.bin_centers, self.binned_counts, width=self.bin_centers[1] - self.bin_centers[0], linewidth=0,
                            color='k', label='Data')
-                    ax.plot(self.fine_phase_grid, self.gausses, label=f'Gaussian Fit')
+                    for n, g in enumerate(self.gausses_i.T):
+                        ax.plot(self.fine_phase_grid, g, label=f'{self.orders[::-1][n]}')
                     ax.set_title(f'CLICK THE BOUNDARY BETWEEN ORDER {self.orders[::-1][i]-1} AND '
                                  f'{self.orders[::-1][i]}\n then exit the plot')
                     ax.set_xlabel(r'Phase $\times 2\pi$')
                     ax.set_ylabel('Photon Count')
                     klicker = clicker(ax, ["event"])
+                    plt.tight_layout()
                     plt.show()
                     self.order_edges[i + 1, p] = klicker.get_positions()['event'][0, 0]
         

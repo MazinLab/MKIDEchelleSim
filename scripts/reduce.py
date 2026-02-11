@@ -137,35 +137,55 @@ if __name__ == "__main__":
 
         pixel_dict = {}
         logger.info('Fitting pixel by pixel.')
-        for p in tqdm.tqdm(range(int(len(pixels)/2)-1, len(pixels)-1)):  # do the non-linear least squares fit for each pixel
+        for p in tqdm.tqdm(range(int(len(pixels)/2), len(pixels))):  # do the non-linear least squares fit for each pixel
             pixel_dict.update({f"{p}": Pixel(p, nord, spectro.orders, resid_map[p], photons_pixel[p], bin_edges, bin_centers, pix_E[:, p], fine_phase_grid)})
             pixel_dict[f"{p}"].fit(leg_e)
             
-            if pixel_dict[f"{p}"].all_orders:
-                pixel_dict[f"{p}"].extract_model(leg_e)
-                
-            # use adjacent pixels to fit pixels with missing orders, starting from the middle
-            elif pixel_dict[f"{p - 1}"].all_orders:
-                # get the ratio of the order amplitudes wrt largest
-                max_amp = np.max(pixel_dict[f"{p - 1}"].fit_amp)
-                ratio = pixel_dict[f"{p - 1}"].fit_amp / max_amp
-                pixel_dict[f"{p}"].fit(leg_e, ratio)
-
-            pixel_dict[f"{p}"].extract_model(leg_e)
-            pixel_dict[f"{p}"].get_order_edges()
-            pixel_dict[f"{p}"].order_sort()
-            pixel_dict[f"{p}"].plot(leg_e, args.debug)
-
-        for p in tqdm.tqdm(range(len(pixels)-1, int(len(pixels)/2)-1, -1)):
-            if not pixel_dict[f"{p}"].all_orders and pixel_dict[f"{p + 1}"].all_orders:
-                # get the ratio of the order amplitudes wrt largest
-                max_amp = np.max(pixel_dict[f"{p + 1}"].fit_amp)
-                ratio = pixel_dict[f"{p + 1}"].fit_amp / max_amp
-                pixel_dict[f"{p}"].fit(leg_e, ratio)
-                pixel_dict[f"{p}"].extract_model(leg_e)
+            
+            try:
+                if pixel_dict[f"{p}"].all_orders:
+                    pixel_dict[f"{p}"].extract_model(leg_e)
+                # use adjacent pixels to fit pixels with missing orders, starting from the middle
+                elif pixel_dict[f"{p - 1}"].all_orders:
+                    # get the ratio of the order amplitudes wrt largest
+                    max_amp = np.max(pixel_dict[f"{p - 1}"].fit_amp)
+                    ratio = pixel_dict[f"{p - 1}"].fit_amp / max_amp
+                    pixel_dict[f"{p}"].fit(leg_e, ratio)
+                    pixel_dict[f"{p}"].extract_model(leg_e)
+                else:
+                    continue
                 pixel_dict[f"{p}"].get_order_edges()
                 pixel_dict[f"{p}"].order_sort()
                 pixel_dict[f"{p}"].plot(leg_e, args.debug)
+            except KeyError:
+                continue
+            except (ValueError, IndexError, TypeError):
+                pixel_dict[f"{p}"].all_orders = False
+
+        for p in tqdm.tqdm(range(0, int(len(pixels)/2))[::-1]):
+            pixel_dict.update({f"{p}": Pixel(p, nord, spectro.orders, resid_map[p], photons_pixel[p], bin_edges,
+                                             bin_centers, pix_E[:, p], fine_phase_grid)})
+            pixel_dict[f"{p}"].fit(leg_e)
+
+            try:
+                if pixel_dict[f"{p}"].all_orders:
+                    pixel_dict[f"{p}"].extract_model(leg_e)
+                # use adjacent pixels to fit pixels with missing orders, starting from the middle
+                elif pixel_dict[f"{p + 1}"].all_orders:
+                    # get the ratio of the order amplitudes wrt largest
+                    max_amp = np.max(pixel_dict[f"{p + 1}"].fit_amp)
+                    ratio = pixel_dict[f"{p + 1}"].fit_amp / max_amp
+                    pixel_dict[f"{p}"].fit(leg_e, ratio)
+                    pixel_dict[f"{p}"].extract_model(leg_e)
+                else:
+                    continue
+                pixel_dict[f"{p}"].get_order_edges()
+                pixel_dict[f"{p}"].order_sort()
+                pixel_dict[f"{p}"].plot(leg_e, args.debug)
+            except KeyError:
+                continue
+            except (ValueError, IndexError, TypeError):
+                pixel_dict[f"{p}"].all_orders = False
 
         msf_obj = pixeldict_to_msf(pixel_dict)
 
