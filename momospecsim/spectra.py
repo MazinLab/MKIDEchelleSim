@@ -444,17 +444,17 @@ class Target:
         # use FSR to bin and order sort:
         fsr = spectrograph.fsr(order=spectrograph.orders).to(u.nm)
         hist_bins = np.empty((nord + 1, npix))  # choosing rough histogram bins by using FSR of each pixel/wave
-        hist_bins[0, :] = (lambda_pixel[-1, :] - fsr[-1] / 2).value
         hist_bins[1:, :] = [(lambda_pixel[i, :] + fsr[i] / 2).value for i in range(nord)[::-1]]
         hist_bins = wave_to_phase(waves=hist_bins, minwave=self.minwave, maxwave=self.maxwave)
+        hist_bins[0, :] = -1
+        hist_bins[-1, :] = 0
 
         photons_binned = np.empty((nord, npix))
         for j in range(npix):
-            photons_binned[:, j], _ = np.histogram(a=self.photons_realign[j], bins=hist_bins[:, j], density=False)
+            photons_binned[:, j], _ = np.histogram(a=self.photons_realign[j], bins=hist_bins[:, j])
 
         # normalize to level of convolution since that's where it came from and calculate noise:
-        photons_binned = (
-                photons_binned * u.ph * reduce_factor[None, :] / (exptime * u.s)).to(u.ph / u.s).value
+        photons_binned = (photons_binned * u.ph * reduce_factor[None, :] / (exptime * u.s)).to(u.ph / u.s).value
 
         lambda_left = spectrograph.pixel_wavelengths(edge='left')
         blazed_int_spec = np.array([engine.lambda_to_pixel_space(array_wave=self.waveset,

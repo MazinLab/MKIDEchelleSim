@@ -253,12 +253,12 @@ if __name__ == '__main__':
     target.optically_broaden(nondim_lsf_width=spectro.nondimensional_lsf_width)
 
     # convolve with MKID resolution widths:
-    convol_wave, convol_result, mkid_kernel = eng.convolve_mkid_response(wave=target.waveset,
-                                                                         spectral_fluxden=target.spectrum,
-                                                                         oversampling=args.osamp,
-                                                                         n_sigma_mkid=args.nsig,
-                                                                         simp=args.simpconvol,
-                                                                         energy=E_convol)
+    convol_wave, convol_result = eng.convolve_mkid_response(wave=target.waveset,
+                                                            spectral_fluxden=target.spectrum,
+                                                            oversampling=args.osamp,
+                                                            n_sigma_mkid=args.nsig,
+                                                            simp=args.simpconvol,
+                                                            energy=E_convol)
 
     # conduct MKID observation sequence:
     photons, observed, reduce_factor = detector.observe(convol_wave=convol_wave, convol_result=convol_result,

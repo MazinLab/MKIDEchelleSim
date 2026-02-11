@@ -92,7 +92,7 @@ def draw_photons(convol_wave,
     wave_unit = u.eV if energy else u.nm
     wave_pix = wave_pix.to(wave_unit).value
 
-    cdf = (np.cumsum(result_pix, axis=0) * exptime).decompose()
+    cdf = (np.cumsum(result_pix, axis=0) * exptime).decompose().to(u.ph / (u.cm**2))
     total_photons = cdf[-1, :]
 
     # Poisson draw after limiting because MKID saturation rate
@@ -254,7 +254,7 @@ class Engine:
         # returning the convolution spacing back in line with everything else:
         result = result.to(u.ph / u.cm ** 2 / u.s) / norms[None, ...] * dx[None, ...].value
 
-        return result_wave, result, mkid_kernel
+        return result_wave, result
 
     def lambda_to_pixel_space(self, array_wave, array, leftedge):
         """
