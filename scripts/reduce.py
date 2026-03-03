@@ -6,7 +6,6 @@ import warnings
 from datetime import datetime as dt
 import argparse
 import logging
-import os
 import tqdm
 from numpy.polynomial.legendre import Legendre
 
@@ -17,10 +16,9 @@ from momospecsim.steps.fitmsf import fitmsf, bin_width_from_MKID_R
 from momospecsim.steps.ordersort import ordersort
 from momospecsim.steps.wavecal import wavecal
 from momospecsim.steps.extract import extract
-from momospecsim.simsettings import SpecSimSettings
 from momospecsim.msf import MKIDSpreadFunction
 import momospecsim.utils.general as gen
-from momospecsim.detector import wave_to_phase, phase_to_wave, sorted_table, Pixel
+from momospecsim.detector import sorted_table, Pixel
 
 
 if __name__ == "__main__":
@@ -42,13 +40,6 @@ if __name__ == "__main__":
                              'Directory/name of the complete MKID Spread Function .pkl file.')
     parser.add_argument('--bin_range', default=(-1.5, 0), type=tuple,
                         help='Start/stop range for phase histogram.')
-    parser.add_argument('--missing_order_pix', nargs='*',
-                        default=[0, 349, 3, 350, 1299, 1, 0, 1299, 13, 1300, 2047, 2, 1300, 2047, 24],
-                        help='Array of [startpix, endpix, missing-orders as single digit indexed from 1, and repeat],'
-                             'e.g.: 0 999 13 1000 1999 25 2000 2047 4'
-                             'will become [0, 999, 13,  1000, 1999, 25,  2000, 2047, 4]'
-                             'where       sta sto  ord   sta  sto  ord   sta   sto  ord')
-    # TODO: eradicate missing order pix for neighboring pixel knowledge
 
     # optional wavecal args:
     parser.add_argument('--wavecal', default='outdir/emission.h5',
@@ -96,9 +87,8 @@ if __name__ == "__main__":
                     f"\nThe date and time are: {dt.now().strftime('%Y-%m-%d %H:%M:%S')}.")
 
     # ==================================================================================================================
-    # PARSE STEPS TO RUN
+    # RUN STEPS
     # ==================================================================================================================
-    steps = []  # list to append steps in use
 
     # MSF
     if args.msf.lower().endswith('.h5'):  # the MSF has yet to be fit
@@ -120,72 +110,69 @@ if __name__ == "__main__":
         # shortening some longer variable names:
         nord = spectro.nord
         pixels = detector.pixel_indices
-        pix_waves = spectro.pixel_wavelengths().to(u.nm)[::-1]  # flip order axis to be in ascending phase/lambda
-        pix_E = gen.wave_to_energy(pix_waves).value  # convert to energy
+        pix_wav = spectro.pixel_wavelengths().to(u.nm)[::-1]  # flip order axis to be in ascending phase/lambda
+        pix_E = gen.wave_to_energy(pix_wav).value  # convert to energy
 
-        # pre-bin each pixel with the same bin edges and get centers for plotting:
+        # create bin edges and get centers for plotting:
         bin_width = bin_width_from_MKID_R(detector.design_R0)
         bin_edges = np.arange(args.bin_range[0], args.bin_range[1], bin_width)
         bin_centers = bin_edges[:-1] + np.diff(bin_edges) / 2
 
         # define phase grid for plotting/integrating more accurately
-        fine_phase_grid = np.linspace(args.bin_range[0], args.bin_range[1], 1000)
+        fine_grid = np.linspace(args.bin_range[0], args.bin_range[1], 1000)
 
-        leg_e = Legendre(coef=(0, 0, 0), domain=[-1, 0])  # setup the energy Legendre object
+        # setup the energy Legendre object
+        leg_e = Legendre(coef=(0, 0, 0), domain=[-1, 0])
 
-        warnings.filterwarnings('ignore', category=RuntimeWarning)  # suppresses warning that occurs each fit
+        # suppresses warning that occurs each fit
+        warnings.filterwarnings('ignore', category=RuntimeWarning)
 
+        plot_debug = args.debug
         pixel_dict = {}
         logger.info('Fitting pixel by pixel.')
-        for p in tqdm.tqdm(range(int(len(pixels)/2), len(pixels))):  # do the non-linear least squares fit for each pixel
-            pixel_dict.update({f"{p}": Pixel(p, nord, spectro.orders, resid_map[p], photons_pixel[p], bin_edges, bin_centers, pix_E[:, p], fine_phase_grid)})
+        for p, q in tqdm.tqdm(zip(range(int(len(pixels)/2), len(pixels)), range(0, int(len(pixels)/2))[::-1]), total=int(len(pixels)/2)):  # do the non-linear least squares fit for each pixel
+            pixel_dict.update({f"{p}": Pixel(
+                p, spectro.orders, resid_map[p], photons_pixel[p], bin_edges, bin_centers, pix_E[:, p], fine_grid)})
             pixel_dict[f"{p}"].fit(leg_e)
             
+            pixel_dict.update({f"{q}": Pixel(
+                q, spectro.orders, resid_map[q], photons_pixel[q], bin_edges, bin_centers, pix_E[:, q], fine_grid)})
+            pixel_dict[f"{q}"].fit(leg_e)
             
-            try:
-                if pixel_dict[f"{p}"].all_orders:
-                    pixel_dict[f"{p}"].extract_model(leg_e)
-                # use adjacent pixels to fit pixels with missing orders, starting from the middle
-                elif pixel_dict[f"{p - 1}"].all_orders:
-                    # get the ratio of the order amplitudes wrt largest
-                    max_amp = np.max(pixel_dict[f"{p - 1}"].fit_amp)
-                    ratio = pixel_dict[f"{p - 1}"].fit_amp / max_amp
-                    pixel_dict[f"{p}"].fit(leg_e, ratio)
-                    pixel_dict[f"{p}"].extract_model(leg_e)
-                else:
-                    continue
-                pixel_dict[f"{p}"].get_order_edges()
-                pixel_dict[f"{p}"].order_sort()
-                pixel_dict[f"{p}"].plot(leg_e, args.debug)
-            except KeyError:
-                continue
-            except (ValueError, IndexError, TypeError):
-                pixel_dict[f"{p}"].all_orders = False
+            #try:
+            if not pixel_dict[f"{p}"].all_orders and pixel_dict[f"{p - 1}"].all_orders:
+                # get the ratio of the order amplitudes wrt largest
+                max_amp = np.max(pixel_dict[f"{p - 1}"].fit_amp)
+                ratio = pixel_dict[f"{p - 1}"].fit_amp / max_amp
+                pixel_dict[f"{p}"].fit(leg_e, ratio)
 
-        for p in tqdm.tqdm(range(0, int(len(pixels)/2))[::-1]):
-            pixel_dict.update({f"{p}": Pixel(p, nord, spectro.orders, resid_map[p], photons_pixel[p], bin_edges,
-                                             bin_centers, pix_E[:, p], fine_phase_grid)})
-            pixel_dict[f"{p}"].fit(leg_e)
+            pixel_dict[f"{p}"].extract_model(leg_e)
+            pixel_dict[f"{p}"].get_order_edges()
+            pixel_dict[f"{p}"].order_sort()
+            pixel_dict[f"{p}"].plot(leg_e, plot_debug)
+            
+            #except (KeyError, ValueError, IndexError, TypeError, AttributeError, NameError):
+            #    pixel_dict[f"{p}"].all_orders = False
 
-            try:
-                if pixel_dict[f"{p}"].all_orders:
-                    pixel_dict[f"{p}"].extract_model(leg_e)
-                # use adjacent pixels to fit pixels with missing orders, starting from the middle
-                elif pixel_dict[f"{p + 1}"].all_orders:
-                    # get the ratio of the order amplitudes wrt largest
-                    max_amp = np.max(pixel_dict[f"{p + 1}"].fit_amp)
-                    ratio = pixel_dict[f"{p + 1}"].fit_amp / max_amp
-                    pixel_dict[f"{p}"].fit(leg_e, ratio)
-                    pixel_dict[f"{p}"].extract_model(leg_e)
-                else:
-                    continue
-                pixel_dict[f"{p}"].get_order_edges()
-                pixel_dict[f"{p}"].order_sort()
-                pixel_dict[f"{p}"].plot(leg_e, args.debug)
-            except KeyError:
-                continue
-            except (ValueError, IndexError, TypeError):
-                pixel_dict[f"{p}"].all_orders = False
+            #try:
+            if not pixel_dict[f"{q}"].all_orders and pixel_dict[f"{q + 1}"].all_orders:
+                # get the ratio of the order amplitudes wrt largest
+                max_amp = np.max(pixel_dict[f"{q + 1}"].fit_amp)
+                ratio = pixel_dict[f"{q + 1}"].fit_amp / max_amp
+                pixel_dict[f"{q}"].fit(leg_e, ratio)
+
+            pixel_dict[f"{q}"].extract_model(leg_e)
+            pixel_dict[f"{q}"].get_order_edges()
+            pixel_dict[f"{q}"].order_sort()
+            pixel_dict[f"{q}"].plot(leg_e, plot_debug)
+
+            #except (KeyError, ValueError, IndexError, TypeError, AttributeError, NameError):
+            #    pixel_dict[f"{q}"].all_orders = False
+
+        n_fail = 0
+        for p in pixel_dict:
+            if not pixel_dict[f"{p}"].all_orders:
+                n_fail += 1
 
         msf_obj = pixeldict_to_msf(pixel_dict)
 

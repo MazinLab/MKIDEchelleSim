@@ -56,7 +56,7 @@ def init_params(phi_guess, e_guess, s_guess, a_guess, e_domain=[-1, 0], w_constr
 
     if w_constr:
         # add energy coefs to params object:
-        parameters.add(name='e1', value=e_coefs[1], max=0)  # must be negative
+        parameters.add(name='e1', value=e_coefs[1], max=0)  # must be negative correlation
         parameters.add(name='e2', value=e_coefs[2], min=-0.5, max=0.5)
 
         # add the sigma coefs to params object:
@@ -65,10 +65,10 @@ def init_params(phi_guess, e_guess, s_guess, a_guess, e_domain=[-1, 0], w_constr
         parameters.add(name='s2', value=s_coefs[2], min=-1e-2, max=1e-2)
 
         # add phi_0s to params object:
-        parameters.add(name='phi_0', value=phi_guess[-1], min=phi_guess[-1]-0.1, max=phi_guess[-1] + 0.1)
+        parameters.add(name='phi_0', value=phi_guess[-1], min=phi_guess[-1]-0.01, max=phi_guess[-1] + 0.1)
         # add amplitudes to params object:
         for n, a in enumerate(a_guess):
-            parameters.add(name=f'O{n}_amp', value=a, min=1, max=np.max(a_guess)*1.2)
+            parameters.add(name=f'O{n}_amp', value=a, min=5, max=np.max(a_guess)*2)
     else:
         # add energy coefs to params object:
         parameters.add(name='e1', value=e_coefs[1])
@@ -84,7 +84,7 @@ def init_params(phi_guess, e_guess, s_guess, a_guess, e_domain=[-1, 0], w_constr
     
         # add amplitudes to params object:
         for n, a in enumerate(a_guess):
-            parameters.add(name=f'O{n}_amp', value=a)
+            parameters.add(name=f'O{n}_amp', value=a, min=5)
 
     return parameters
 
@@ -108,8 +108,12 @@ def fit_func(params: Parameters, x_phases, y_counts=None, orders=None, leg_e=Non
 
     e_coef_convert = Legendre(coef=(0, e1, e2), domain=[-1, 0]).convert().coef
     # obtain the 0th order energy coef
-    e0_convert = e0_from_params(e_coef_convert[1], e_coef_convert[2], phi_0)
-    e0 = Legendre(coef=(e0_convert, e_coef_convert[1], e_coef_convert[2])).convert(domain=[-1, 0]).coef[0]
+    if e2 == 0:
+        e0_convert = e0_from_params(e_coef_convert[1], 0, phi_0)
+        e0 = Legendre(coef=(e0_convert, e_coef_convert[1], 0)).convert(domain=[-1, 0]).coef[0]
+    else:
+        e0_convert = e0_from_params(e_coef_convert[1], e_coef_convert[2], phi_0)
+        e0 = Legendre(coef=(e0_convert, e_coef_convert[1], e_coef_convert[2])).convert(domain=[-1, 0]).coef[0]
 
     # pass coef parameters to polys:
     setattr(leg_e, 'coef', (e0, e1, e2))
@@ -117,10 +121,12 @@ def fit_func(params: Parameters, x_phases, y_counts=None, orders=None, leg_e=Non
 
     try:
         # calculate the other phi_m based on phi_0:
-        phis = phis_from_grating_eq(orders, phi_0, leg=leg_e,
-                                    coefs=[e0_convert,
-                                           e_coef_convert[1],
-                                           e_coef_convert[2]])
+        if e2 == 0:
+            phis = phis_from_grating_eq(orders, phi_0, leg=leg_e,
+                                        coefs=[e0_convert, e_coef_convert[1], 0])
+        else:
+            phis = phis_from_grating_eq(orders, phi_0, leg=leg_e,
+                                        coefs=[e0_convert, e_coef_convert[1], e_coef_convert[2]])
 
         # get sigmas at each phase center:
         sigs = leg_s(leg_e(phis))
@@ -140,7 +146,7 @@ def fit_func(params: Parameters, x_phases, y_counts=None, orders=None, leg_e=Non
                 model_1[model_1 < 1] = 1
                 residual = np.divide(y_counts-model, np.sqrt(model_1))
 
-    except IndexError:
+    except (IndexError, ValueError):
         if y_counts is not None:
             residual = np.full(y_counts.shape, np.max(y_counts)/np.sqrt(np.max(y_counts)))
         else:
@@ -228,7 +234,7 @@ def phis_from_grating_eq(orders, phi_0: float, leg: Legendre, coefs=None):
         else:  # if there are 2 valid roots, use the one in the proper range
             try:
                 phis.append(roots[(-1.5 < roots) & (roots < phi_0)].max())
-            except IndexError:
+            except (IndexError, ValueError):
                 phis.append(i)
 
     return np.append(np.array(phis), phi_0)
